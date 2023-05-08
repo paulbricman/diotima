@@ -33,8 +33,8 @@ assert entropy(probs) < entropy(max_entropy_probs)
 
 # Maximizing and Minimizing Entropy
 
-lr = 1e-2
 epochs = int(1e4)
+print("(*) First Model (Minimizing/maximizing entropy)")
 
 def first_model(weights):
     probs = weights_to_probs(weights)
@@ -56,7 +56,7 @@ for epoch in range(epochs):
 print(weights_to_probs(weights), first_model(weights), "(target: " + str(np.log2(n)) + ")")
 assert np.isclose(first_model(weights), entropy(max_entropy_probs), atol=1e-3)
 
-# Optimizing for Target Entropy
+print("(*) Second Model (Optimizing for target entropy)")
 
 def second_model(weights, target):
     probs = weights_to_probs(weights)
@@ -71,3 +71,52 @@ for epoch in range(epochs):
 
 print(weights_to_probs(weights), first_model(weights), "(target: " + str(target) + ")")
 assert np.isclose(second_model(weights, target), 0, atol=1e-3)
+
+def kldiv(p, q):
+    ratios = np.divide(p, q)
+    logs = np.log2(ratios)
+    logs = np.nan_to_num(logs)
+    infos = np.multiply(probs, logs)
+    return np.sum(infos)
+
+assert kldiv(probs, probs) == 0
+print("(*) Third Model (Minimizing KL-divergence)")
+
+def third_model(p_weights, q_weights):
+    p = weights_to_probs(p_weights)
+    q = weights_to_probs(q_weights)
+    return kldiv(p, q)
+
+key, subkey = random.split(key)
+p_weights = uniform(key, (n,))
+key, subkey = random.split(key)
+q_weights = uniform(key, (n,))
+
+g = jit(grad(third_model))
+for epoch in range(epochs):
+    p_weights += g(p_weights, q_weights)
+
+print(weights_to_probs(p_weights))
+print(weights_to_probs(q_weights))
+print(third_model(p_weights, q_weights))
+
+print("(*) Fourth Model (Optimizing for target KL-divergence)")
+
+def fourth_model(p_weights, q_weights, target):
+    p = weights_to_probs(p_weights)
+    q = weights_to_probs(q_weights)
+    return np.power(kldiv(p, q) - target, 2)
+
+key, subkey = random.split(key)
+p_weights = uniform(key, (n,))
+key, subkey = random.split(key)
+q_weights = uniform(key, (n,))
+target = 0.05
+
+g = jit(grad(fourth_model))
+for epoch in range(epochs):
+    p_weights += -g(p_weights, q_weights, target)
+
+print(weights_to_probs(p_weights))
+print(weights_to_probs(q_weights))
+print(third_model(p_weights, q_weights))
