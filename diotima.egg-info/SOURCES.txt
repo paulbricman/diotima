@@ -1,0 +1,7 @@
+setup.py
+diotima/__init__.py
+diotima/world.py
+diotima.egg-info/PKG-INFO
+diotima.egg-info/SOURCES.txt
+diotima.egg-info/dependency_links.txt
+diotima.egg-info/top_level.txt

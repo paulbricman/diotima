@@ -1,26 +1,34 @@
-from typing import NamedTuple, Array
+from typing import NamedTuple
 from collections import namedtuple
 from jax._src import prng
 import jax.numpy as np
+from jax import Array, jit, random
 
 
 class PhysicsConfig(NamedTuple):
-    mu_ks: np.ndarray
-    sigma_ks: np.ndarray
-    w_ks: np.ndarray
+    """
+    Contains fundamental physical constants which parametrize the physics of a universe.
+    Each field from the first group requires one value per element type.
+    Each field from the second group requires one value per element-element combination.
+    """
+    mu_ks: Array
+    sigma_ks: Array
+    w_ks: Array
 
-    mu_gs: np.ndarray
-    sigma_gs: np.ndarray
-    c_reps: np.ndarray
+    mu_gs: Array
+    sigma_gs: Array
+    c_reps: Array
 
 
 class UniverseConfig:
     def __init__(
+            self,
             n_elems: int = 4,
             n_atoms: int = 100,
             n_dims: int = 2,
             elem_distrib: np.ndarray = None,
-            physics_config: PhysicsConfig = None
+            physics_config: PhysicsConfig = None,
+            key: prng.PRNGKeyArray = None,
     ):
         assert n_elems > 0
         self.n_elems = n_elems
@@ -31,20 +39,25 @@ class UniverseConfig:
         assert n_dims > 0
         self.n_dims = n_dims
 
+        if key is None:
+            self.key = random.PRNGKey(0)
+        else:
+            self.key = key
+
         if elem_distrib is None:
-            self.key, subkey = jax.random.split(self.key)
-            self.elem_distrib = jax.random.uniform(subkey, (self.n_elems,))
+            self.key, subkey = random.split(self.key)
+            self.elem_distrib = random.uniform(subkey, (self.n_elems,))
         else:
             assert elem_distrib.shape == (n_elems,)
             self.elem_distrib = elem_distrib
 
-        if physics is None:
-            self.load_default_physics_config()
+        if physics_config is None:
+            self.physics_config = self.default_physics_config()
         else:
             self.validate_physics_config(physics_config)
             self.physics_config = physics_config
 
-    def validate_physics_config(physics_config: PhysicsConfig):
+    def validate_physics_config(self, physics_config: PhysicsConfig):
         elem_constants = [
             physics_config.mu_ks,
             physics_config.sigma_ks,
@@ -58,26 +71,23 @@ class UniverseConfig:
         ]
 
         assert all([e.shape == (self.n_elems,) for e in elem_constants])
-        assert all([e.shape == (self.n_elems, self.n_elems)
-                   for e in elem_constants])
+        assert all([e.shape == (self.n_elems, self.n_elems,)
+                   for e in elem_elem_constants])
 
-    def load_default_physics_config():
-        physics_config = PhysicsConfig()
-
-        physics_config.mu_ks = np.tile(4.0, (self.n_elems))
-        physics_config.sigma_ks = np.tile(1.0, (self.n_elems))
-        physics_config.w_ks = np.tile(0.022, (self.n_elems))
-
-        physics_config.mu_gs = np.tile(0.6, (self.n_elems, self.n_elems))
-        physics_config.sigma_gs = np.tile(0.15, (self.n_elems, self.n_elems))
-        physics_config.c_reps = np.tile(1.0, (self.n_elems, self.n_elems))
-
-        self.physics_config = physics_config
-        # TODO: Test load defaults and validate
+    def default_physics_config(self):
+        return PhysicsConfig(
+            np.tile(4.0, (self.n_elems)),
+            np.tile(1.0, (self.n_elems)),
+            np.tile(0.022, (self.n_elems)),
+            np.tile(0.6, (self.n_elems, self.n_elems)),
+            np.tile(0.15, (self.n_elems, self.n_elems)),
+            np.tile(1.0, (self.n_elems, self.n_elems))
+        )
 
 
 class Universe:
     def __init__(
+        self,
         universe_config: UniverseConfig = None,
         key=None,
     ):
@@ -87,7 +97,7 @@ class Universe:
             self.universe_config = universe_config
 
         if key is None:
-            self.key = jax.random.PRNGKey(0)
+            self.key = random.PRNGKey(0)
         else:
             self.key = key
 
@@ -97,11 +107,11 @@ class Universe:
     @jit
     def seed():
         self.key, key_locs, key_elems = jax.random.split(self.key, num=3)
-        self.atom_locs = jax.random.normal(size=(
+        self.atom_locs = random.normal(size=(
             self.universe_config.n_atoms,
             self.universe_config.n_dims
         ))
-        self.atom_elems = jax.random.uniform(size=(
+        self.atom_elems = random.uniform(size=(
             self.universe_config.n_atoms,
             self.universe_config.n_elems
         ))
@@ -165,14 +175,16 @@ class Universe:
             # TODO: Take into account atom elements to weigh energy gradients
             # TODO: Test motions are invariant to n_elems if all elem constants identical
             # See motion_f
+            pass
 
         # See step_f, odeint_euler
+        pass
 
 
 class MultiverseConfig:
     def __init__(
             n_branches: int,
-            universe_configs: Array[UniverseConfig] = None
+            universe_configs: Array = None
     ):
         assert n_branches > 0
         self.n_branches = n_branches
