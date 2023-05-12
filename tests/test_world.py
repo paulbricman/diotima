@@ -1,6 +1,8 @@
 from diotima.world import UniverseConfig, Universe
+import diotima.physics as physics
 import pytest
 import jax.numpy as np
+from copy import deepcopy
 
 
 @pytest.fixture
@@ -18,7 +20,10 @@ def test_init_universe_config(universe_config: UniverseConfig):
 
 
 def test_validate_physics(universe_config: UniverseConfig):
-    universe_config.validate_physics_config(universe_config.physics_config)
+    physics.validate_physics_config(
+        universe_config.physics_config,
+        universe_config.n_elems
+    )
 
 
 def test_init_universe(universe: Universe):
@@ -26,7 +31,11 @@ def test_init_universe(universe: Universe):
 
 
 def test_fields(universe: Universe):
-    fields = universe.fields(universe.atom_locs[0])
+    fields = physics.fields(
+        universe.atom_locs[0],
+        universe.atom_locs,
+        universe.universe_config
+    )
 
     # For each element, how present it is.
     assert fields.matters.shape == (
@@ -53,9 +62,11 @@ def test_fields(universe: Universe):
 
 
 def test_element_weighted_fields(universe: Universe):
-    fields = universe.element_weighted_fields(
+    fields = physics.element_weighted_fields(
         universe.atom_locs[0],
-        universe.atom_elems[0]
+        universe.atom_elems[0],
+        universe.atom_locs,
+        universe.universe_config
     )
 
     # How present the element mixture is.
@@ -72,7 +83,11 @@ def test_element_weighted_fields(universe: Universe):
 
 
 def test_motion(universe: Universe):
-    motions = universe.motion()
+    motions = physics.motion(
+        universe.atom_locs,
+        universe.atom_elems,
+        universe.universe_config
+    )
 
     # Velocity vector for each atom.
     assert motions.shape == (
@@ -81,11 +96,28 @@ def test_motion(universe: Universe):
     )
 
 
-def test_run(universe: Universe):
-    motions = universe.motion()
+def test_one_step(universe: Universe):
+    motions = physics.motion(
+        universe.atom_locs,
+        universe.atom_elems,
+        universe.universe_config
+    )
+
     init_locs = universe.atom_locs
     universe.run()
     final_locs = universe.atom_locs
 
     # Given the one step run default, this should hold.
-    assert np.allclose(init_locs + universe.universe_config.dt * motions, final_locs)
+    assert np.allclose(
+        init_locs +
+        universe.universe_config.dt *
+        motions,
+        final_locs)
+
+
+def test_run(universe: Universe):
+    target = universe.locs_after_steps(2)[0]
+    universe.run()
+    universe.run()
+
+    assert np.allclose(universe.atom_locs, target)
