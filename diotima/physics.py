@@ -32,7 +32,11 @@ def default_physics_config(n_elems: int):
     )
 
 
-def validate_physics_config(physics_config: PhysicsConfig, n_elems: int):
+def default_elem_distrib(n_elems: int):
+    return np.ones((n_elems,)) / n_elems
+
+
+def valid_physics_config(physics_config: PhysicsConfig, n_elems: int):
     elem_constants = [
         physics_config.mu_ks,
         physics_config.sigma_ks,
@@ -45,9 +49,7 @@ def validate_physics_config(physics_config: PhysicsConfig, n_elems: int):
         physics_config.c_reps
     ]
 
-    assert all([e.shape == (n_elems,) for e in elem_constants])
-    assert all([e.shape == (n_elems, n_elems,)
-               for e in elem_elem_constants])
+    return all([e.shape == (n_elems,) for e in elem_constants]) and all([e.shape == (n_elems, n_elems,) for e in elem_elem_constants])
 
 
 class Fields(NamedTuple):
