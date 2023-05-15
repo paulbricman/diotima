@@ -8,9 +8,7 @@ from jax.lax import scan
 
 class PhysicsConfig(NamedTuple):
     """
-    Contains fundamental physical constants which parametrize the physics of a universe.
-    Each field from the first group requires one value per element type.
-    Each field from the second group requires one value per element-element combination.
+    Object containing fundamental physical constants which parametrize physics.
     """
     mu_ks: Array
     sigma_ks: Array
