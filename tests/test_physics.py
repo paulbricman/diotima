@@ -24,7 +24,7 @@ def test_validate_physics(universe_config: UniverseConfig):
 
 
 def test_fields(universe: Universe):
-    fields = physics.fields(
+    fields = physics.compute_fields(
         universe.atom_locs[0],
         universe.atom_locs,
         universe.universe_config
@@ -55,7 +55,7 @@ def test_fields(universe: Universe):
 
 
 def test_element_weighted_fields(universe: Universe):
-    fields = physics.element_weighted_fields(
+    fields = physics.compute_element_weighted_fields(
         universe.atom_locs[0],
         universe.atom_elems[0],
         universe.atom_locs,

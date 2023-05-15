@@ -52,7 +52,7 @@ def valid_physics_config(physics_config: PhysicsConfig, n_elems: int):
 
 class Fields(NamedTuple):
     """
-    Utility abstraction to package up fields.
+    Utility object containing linked field information.
     """
     matters: Array
     attractions: Array
@@ -108,7 +108,7 @@ def compute_repulsion_fields(distances, universe_config):
         np.arange(universe_config.n_elems))
 
 
-def fields(loc, atom_locs, universe_config):
+def compute_fields(loc, atom_locs, universe_config):
     distances = np.sqrt(np.square(loc - atom_locs).sum(-1).clip(1e-10))
     matters = compute_matter_fields(distances, universe_config)
     attractions = compute_attraction_fields(matters, universe_config)
@@ -117,8 +117,8 @@ def fields(loc, atom_locs, universe_config):
     return Fields(matters, attractions, repulsions, energies)
 
 
-def element_weighted_fields(loc, elem, atom_locs, universe_config):
-    unweighted_fields = fields(loc, atom_locs, universe_config)
+def compute_element_weighted_fields(loc, elem, atom_locs, universe_config):
+    unweighted_fields = compute_fields(loc, atom_locs, universe_config)
     matters = np.dot(unweighted_fields.matters, elem)
     attractions = np.dot(unweighted_fields.attractions.sum(axis=1), elem)
     repulsions = np.dot(unweighted_fields.repulsions.sum(axis=1), elem)
@@ -129,7 +129,7 @@ def element_weighted_fields(loc, elem, atom_locs, universe_config):
 def motion(atom_locs, atom_elems, universe_config):
     grad_energies = grad(
         lambda loc,
-        elem: element_weighted_fields(
+        elem: compute_element_weighted_fields(
             loc,
             elem,
             atom_locs,
