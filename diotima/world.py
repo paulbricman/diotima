@@ -12,7 +12,7 @@ class UniverseConfig(NamedTuple):
     Object containing universe configuration details.
     """
     n_elems: int = 2
-    n_atoms: int = 10
+    n_atoms: int = 3
     n_dims: int = 2
     dt: float = 0.1
     physics_config: physics.PhysicsConfig = physics.default_physics_config(n_elems)
@@ -26,7 +26,8 @@ class Universe(NamedTuple):
     universe_config: UniverseConfig
     atom_locs: Array
     atom_elems: Array
-    history: Array = None
+    locs_history: Array = None
+    motions_history: Array = None
     step: int = 0
 
 
@@ -70,25 +71,44 @@ def run(universe: Universe, n_steps: int = 1) -> Universe:
     Returns:
         Update universe object.
     """
-    def pure_step(atom_locs, _): return physics.step(
-        atom_locs,
-        universe.atom_elems,
-        universe.universe_config
+    def pure_step(state, _):
+        return physics.step(
+            state.locs,
+            universe.atom_elems,
+            universe.universe_config
+        )
+
+    last_state, state_history = scan(
+        pure_step,
+        physics.first_snapshot(
+            universe.atom_locs,
+            universe.universe_config
+        ),
+        None,
+        n_steps
     )
 
-    updated_locs, recent_history = scan(pure_step, universe.atom_locs, None, n_steps)
-    if universe.history is not None:
-        updated_history = np.concatenate(
-            (universe.history,
-            recent_history)
+    if universe.locs_history is not None:
+        updated_locs_history = np.concatenate(
+            (universe.locs_history,
+             state_history.locs)
         )
     else:
-        updated_history = recent_history
+        updated_locs_history = state_history.locs
+
+    if universe.motions_history is not None:
+        updated_motions_history = np.concatenate(
+            (universe.motions_history,
+             state_history.motions)
+        )
+    else:
+        updated_motions_history = state_history.motions
 
     return Universe(
         universe.universe_config,
-        updated_locs,
+        last_state.locs,
         universe.atom_elems,
-        updated_history,
+        updated_locs_history,
+        updated_motions_history,
         universe.step + n_steps
     )

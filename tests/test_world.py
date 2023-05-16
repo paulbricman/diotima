@@ -39,22 +39,29 @@ def test_one_step(universe: Universe):
     assert np.allclose(
         init_locs +
         universe.universe_config.dt *
-        motions,
+        motions.sum(axis=1),
         final_locs)
 
 
 def test_run(universe: Universe):
     parallel_universe = deepcopy(universe)
+    print(parallel_universe.locs_history)
+    parallel_universe2 = run(parallel_universe, 2)
     universe1 = run(universe)
     universe2 = run(universe1)
-    parallel_universe2 = run(parallel_universe, 2)
 
     assert not np.allclose(universe1.atom_locs, universe2.atom_locs)
     assert np.allclose(universe2.atom_locs, parallel_universe2.atom_locs)
 
-    assert np.allclose(universe2.history, parallel_universe2.history)
-    assert universe2.history.shape == (
+    assert np.allclose(universe2.locs_history, parallel_universe2.locs_history)
+    assert universe2.locs_history.shape == (
         2,
+        universe2.universe_config.n_atoms,
+        universe2.universe_config.n_dims
+    )
+    assert universe2.motions_history.shape == (
+        2,
+        universe2.universe_config.n_atoms,
         universe2.universe_config.n_atoms,
         universe2.universe_config.n_dims
     )

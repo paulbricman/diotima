@@ -30,27 +30,31 @@ def test_fields(universe: Universe):
         universe.universe_config
     )
 
-    # For each element, how present it is.
+    # For each element, how present it is, as informed by individual atoms.
     assert fields.matters.shape == (
         universe.universe_config.n_elems,
+        universe.universe_config.n_atoms,
     )
 
-    # For each element, how much is it attracted by each element.
+    # For each elem, how much is it attracted by each elem, as informed by individual atoms.
     assert fields.attractions.shape == (
         universe.universe_config.n_elems,
         universe.universe_config.n_elems,
+        universe.universe_config.n_atoms,
     )
 
-    # For each element, how much is it repelled by each element.
+    # For each elem, how much is it repelled by each elem, as informed by individual atoms.
     assert fields.repulsions.shape == (
         universe.universe_config.n_elems,
         universe.universe_config.n_elems,
+        universe.universe_config.n_atoms,
     )
 
-    # For each element, its energy informed by each element.
+    # For each elem, its energy informed by each elem, as informed by individual atoms.
     assert fields.energies.shape == (
         universe.universe_config.n_elems,
         universe.universe_config.n_elems,
+        universe.universe_config.n_atoms,
     )
 
 
@@ -62,17 +66,25 @@ def test_element_weighted_fields(universe: Universe):
         universe.universe_config
     )
 
-    # How present the element mixture is.
-    assert fields.matters.size == 1
+    # Matter as informed by individual atoms.
+    assert fields.matters.shape == (
+        universe.universe_config.n_atoms,
+    )
 
-    # How attracted the atom is, element mixture considered.
-    assert fields.attractions.size == 1
+    # Attraction as informed by individual atoms.
+    assert fields.attractions.shape == (
+        universe.universe_config.n_atoms,
+    )
 
-    # How repelled the atom is, element mixture considered.
-    assert fields.repulsions.size == 1
+    # Repulsion as informed by individual atoms.
+    assert fields.repulsions.shape == (
+        universe.universe_config.n_atoms,
+    )
 
-    # The energy of the atom, element mixture considered.
-    assert fields.energies.size == 1
+    # Energy as informed by individual atoms.
+    assert fields.energies.shape == (
+        universe.universe_config.n_atoms,
+    )
 
 
 def test_motion(universe: Universe):
@@ -85,5 +97,9 @@ def test_motion(universe: Universe):
     # Velocity vector for each atom.
     assert motions.shape == (
         universe.universe_config.n_atoms,
+        universe.universe_config.n_atoms,
         universe.universe_config.n_dims,
     )
+
+
+
