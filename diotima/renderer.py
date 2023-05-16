@@ -4,6 +4,7 @@ from jax.nn import softmax
 from jax.lax import while_loop, cond, fori_loop
 from typing import Tuple
 from functools import partial
+from jax._src import prng
 from diotima.utils import norm, normalize
 import PIL
 
@@ -96,7 +97,6 @@ def compute_ambient_lighting(
 ):
     pure_signed_distance = partial(signed_distance, atom_locs)
     raw_normals = vmap(grad(pure_signed_distance))(hits)
-    print(raw_normals.shape)
     return raw_normals
 
 
@@ -145,3 +145,44 @@ def raymarch_lights(
     return shadows
 
 
+def compute_shades(
+    colors: Array,
+    shadows: Array,
+    raw_normals: Array,
+    light_dir: Array,
+    ray_dirs: Array,
+):
+    def compute_shade(
+        color: Array,
+        shadow: Array,
+        raw_normal: Array,
+        ray_dir: Array,
+    ):
+        ambient = norm(raw_normal)
+        unit_normal = raw_normal / ambient
+        diffuse = unit_normal.dot(light_dir).clip(0.0) * shadow
+        half = normalize(light_dir - ray_dir)
+        spec = 0.3 * shadow * half.dot(unit_normal).clip(0.0) ** 200.0
+        light = 0.7 * diffuse + 0.1 * ambient
+        return color * light + spec
+
+    shades = vmap(compute_shade)(colors, shadows, raw_normals, ray_dirs)
+    shades = shades ** (1.0 / 2.2)
+    return shades
+
+
+def compute_colors(
+    atom_locs: Array,
+    atom_elems: Array,
+    locs: Array,
+    key: prng.PRNGKeyArray,
+):
+    def compute_element(
+        loc: Array
+    ):
+        # TODO: Weigh atom elements by distance to atom locations.
+        pass
+
+    # TODO: Asign random colors to elements
+    # TODO: Use loc elements and element-color assignments to assign colors to locs.
+    pass 

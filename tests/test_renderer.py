@@ -81,7 +81,7 @@ def test_shoot_rays(camera_loc: Array, atom_locs_render: Array):
     hits = hits.astype("uint8")
     hits = numpy.array(hits)
     img = Image.fromarray(hits)
-    img.save("dummy.jpg")
+    img.save("hits.jpg")
 
 
 def test_ambient_lighting(camera_loc: Array, atom_locs_render: Array):
@@ -100,7 +100,7 @@ def test_ambient_lighting(camera_loc: Array, atom_locs_render: Array):
     hits = hits.astype("uint8")
     hits = numpy.array(hits)
     img = Image.fromarray(hits)
-    img.save("dummy.jpg")
+    img.save("ambient_light.jpg")
 
 
 def test_direct_lighting(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
@@ -120,5 +120,24 @@ def test_direct_lighting(camera_loc: Array, atom_locs_render: Array, light_loc: 
     shadows = shadows.astype("uint8")
     shadows = numpy.array(shadows)
     img = Image.fromarray(shadows)
-    img.save("dummy.jpg")
+    img.save("directional_light.jpg")
 
+
+def test_compute_shades(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
+    view_size = 640, 400
+    w, h = view_size
+    steps, hits = shoot_rays(view_size, camera_loc, atom_locs_render)
+    raw_normals = compute_ambient_lighting(hits, atom_locs_render)
+    steps, traveled, shadows = raymarch_lights(hits, light_loc, atom_locs_render)
+    ray_dirs = spawn_rays(-camera_loc, view_size)
+    shades = compute_shades(np.ones((w * h, 3)), shadows, raw_normals, light_loc, ray_dirs)
+    shades = shades.reshape(h, w, 3)
+
+    print(shades)
+    print(shades.shape)
+
+    shades = shades * 255
+    shades = shades.astype("uint8")
+    shades = numpy.array(shades)
+    img = Image.fromarray(shades)
+    img.save("shades.jpg")
