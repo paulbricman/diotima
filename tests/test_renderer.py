@@ -5,11 +5,17 @@ from diotima.renderer import *
 from jax import Array
 import pytest
 from PIL import Image
+from diotima.utils import norm
 
 
 @pytest.fixture
 def camera_loc():
     return np.array([5., 0., 0.])
+
+
+@pytest.fixture
+def light_loc():
+    return np.array([1., 0., -1.2])
 
 
 @pytest.fixture
@@ -45,27 +51,27 @@ def test_signed_distance(camera_loc: Array, atom_locs_render: Array):
 
 
 def test_raymarch(camera_loc: Array, atom_locs_hit: Array, atom_locs_miss: Array):
-    pure_signed_distance = partial(signed_distance, atom_locs_hit)
-    steps, final_loc = raymarch(pure_signed_distance, camera_loc, -camera_loc)
+    steps, final_loc = raymarch(atom_locs_hit, camera_loc, -camera_loc)
     assert steps < 5
 
-    pure_signed_distance = partial(signed_distance, atom_locs_miss)
-    steps, final_loc = raymarch(pure_signed_distance, camera_loc, -camera_loc)
+    steps, final_loc = raymarch(atom_locs_miss, camera_loc, -camera_loc)
     assert steps > 10
 
 
-def test_radiate(camera_loc: Array):
+def test_spawn_rays(camera_loc: Array):
     view_size = 640, 400
     w, h = view_size
-    grid = radiate(-camera_loc, view_size)
+    grid = spawn_rays(-camera_loc, view_size)
     assert grid.shape == (w * h, 3)
 
 
-def test_render_proper(camera_loc: Array, atom_locs_render: Array):
+def test_shoot_rays(camera_loc: Array, atom_locs_render: Array):
     view_size = 640, 400
     w, h = view_size
 
-    steps, hits = render(view_size, camera_loc, atom_locs_render)
+    steps, hits = shoot_rays(view_size, camera_loc, atom_locs_render)
+    hits = hits.reshape(h, w, 3)
+    steps = steps.reshape(h, w)
 
     assert steps.shape == (h, w)
     assert hits.shape == (h, w, 3)
@@ -76,3 +82,43 @@ def test_render_proper(camera_loc: Array, atom_locs_render: Array):
     hits = numpy.array(hits)
     img = Image.fromarray(hits)
     img.save("dummy.jpg")
+
+
+def test_ambient_lighting(camera_loc: Array, atom_locs_render: Array):
+    view_size = 640, 400
+    w, h = view_size
+    steps, hits = shoot_rays(view_size, camera_loc, atom_locs_render)
+    hits = compute_ambient_lighting(hits, atom_locs_render)
+    hits = norm(hits)
+    hits = hits.reshape(h, w)
+    steps = steps.reshape(h, w)
+
+    assert steps.shape == (h, w)
+    assert hits.shape == (h, w)
+
+    hits = hits * 255
+    hits = hits.astype("uint8")
+    hits = numpy.array(hits)
+    img = Image.fromarray(hits)
+    img.save("dummy.jpg")
+
+
+def test_direct_lighting(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
+    view_size = 640, 400
+    w, h = view_size
+    steps, hits = shoot_rays(view_size, camera_loc, atom_locs_render)
+    steps, traveled, shadows = raymarch_lights(hits, light_loc, atom_locs_render)
+    steps = steps.reshape(h, w)
+    traveled = traveled.reshape(h, w)
+    shadows = shadows.reshape(h, w)
+
+    assert steps.shape == (h, w)
+    assert traveled.shape == (h, w)
+    assert shadows.shape == (h, w)
+
+    shadows = shadows * 255
+    shadows = shadows.astype("uint8")
+    shadows = numpy.array(shadows)
+    img = Image.fromarray(shadows)
+    img.save("dummy.jpg")
+
