@@ -173,16 +173,47 @@ def compute_shades(
 
 def compute_colors(
     atom_locs: Array,
-    atom_elems: Array,
+    atom_colors: Array,
     locs: Array,
-    key: prng.PRNGKeyArray,
+    atom_radius: float = 0.5,
+    temperature: float = 1e-1,
 ):
-    def compute_element(
+    def compute_color(
         loc: Array
     ):
-        # TODO: Weigh atom elements by distance to atom locations.
-        pass
+        distances = norm(loc - atom_locs) - atom_radius
+        weights = softmax(-distances / temperature)
+        color = atom_colors.T @ weights
+        return color
 
-    # TODO: Asign random colors to elements
-    # TODO: Use loc elements and element-color assignments to assign colors to locs.
-    pass 
+    return vmap(compute_color)(locs)
+
+
+def render_frames(
+    locs_history: Array,
+    atom_colors_by_timestep: Array,
+    view_size: Tuple[int, int],
+    camera_loc: Array,
+    light_loc: Array
+):
+    w, h = view_size
+
+    def render_frame(
+            atom_locs: Array,
+            atom_colors: Array
+    ):
+        steps, hits = shoot_rays(view_size, camera_loc, atom_locs)
+        raw_normals = compute_ambient_lighting(hits, atom_locs)
+        steps, traveled, shadows = raymarch_lights(hits, light_loc, atom_locs)
+        ray_dirs = spawn_rays(-camera_loc, view_size)
+        colors = compute_colors(atom_locs, atom_colors, hits)
+        shades = compute_shades(colors, shadows, raw_normals, light_loc, ray_dirs)
+
+        shades = shades.reshape(h, w, 3)
+        shades = shades * 255
+        shades = shades.astype("uint8")
+        shades = np.array(shades)
+
+        return shades
+
+    return vmap(render_frame)(locs_history, atom_colors_by_timestep)

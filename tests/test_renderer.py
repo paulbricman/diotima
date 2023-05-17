@@ -2,10 +2,13 @@ import io
 import jax.numpy as np
 import numpy
 from diotima.renderer import *
-from jax import Array
+from jax import Array, random
 import pytest
 from PIL import Image
 from diotima.utils import norm
+from diotima.world import Universe, UniverseConfig, seed, run
+from einops import repeat
+import cv2
 
 
 @pytest.fixture
@@ -43,6 +46,14 @@ def atom_locs_render():
         [-0.4, -0.8, -0.6],
         [0.2, 0.5, 0.6],
     ])
+
+
+@pytest.fixture
+def universe():
+    return seed(UniverseConfig(
+        n_dims = 3,
+        n_atoms = 8,
+    ))
 
 
 def test_signed_distance(camera_loc: Array, atom_locs_render: Array):
@@ -133,11 +144,65 @@ def test_compute_shades(camera_loc: Array, atom_locs_render: Array, light_loc: A
     shades = compute_shades(np.ones((w * h, 3)), shadows, raw_normals, light_loc, ray_dirs)
     shades = shades.reshape(h, w, 3)
 
-    print(shades)
-    print(shades.shape)
+    assert shades.shape == (h, w, 3)
 
     shades = shades * 255
     shades = shades.astype("uint8")
     shades = numpy.array(shades)
     img = Image.fromarray(shades)
     img.save("shades.jpg")
+
+
+def test_compute_colors(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
+    view_size = 640, 400
+    w, h = view_size
+    steps, hits = shoot_rays(view_size, camera_loc, atom_locs_render)
+    raw_normals = compute_ambient_lighting(hits, atom_locs_render)
+    steps, traveled, shadows = raymarch_lights(hits, light_loc, atom_locs_render)
+    ray_dirs = spawn_rays(-camera_loc, view_size)
+    atom_colors = random.uniform(random.PRNGKey(42), (
+        atom_locs_render.shape[0],
+        3
+    ))
+    colors = compute_colors(atom_locs_render, atom_colors, hits)
+    shades = compute_shades(colors, shadows, raw_normals, light_loc, ray_dirs)
+    shades = shades.reshape(h, w, 3)
+
+    assert shades.shape == (h, w, 3)
+
+    shades = shades * 255
+    shades = shades.astype("uint8")
+    shades = numpy.array(shades)
+    img = Image.fromarray(shades)
+    img.save("colors.jpg")
+
+
+def test_render_frames(universe: Universe, camera_loc: Array, light_loc: Array):
+    n_frames = 20
+    view_size = 640, 400
+    w, h = view_size
+
+    universe = run(universe, n_frames)
+    atom_colors = random.uniform(random.PRNGKey(42), (
+        universe.universe_config.n_atoms,
+        3
+    ))
+
+    atom_colors = repeat(atom_colors, "a c -> f a c", f = n_frames)
+    frames = render_frames(
+        universe.locs_history,
+        atom_colors,
+        view_size,
+        camera_loc,
+        light_loc
+    )
+
+    assert frames.shape == (n_frames, h, w, 3)
+
+    out = cv2.VideoWriter('frames.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 5, (w, h))
+    for frame in numpy.array(frames):
+        out.write(frame)
+    out.release()
+    assert False
+
+
