@@ -203,6 +203,5 @@ def test_render_frames(universe: Universe, camera_loc: Array, light_loc: Array):
     for frame in numpy.array(frames):
         out.write(frame)
     out.release()
-    assert False
 
 
