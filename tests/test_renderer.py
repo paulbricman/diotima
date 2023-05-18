@@ -13,7 +13,7 @@ import cv2
 
 @pytest.fixture
 def camera_loc():
-    return np.array([5., 0., 0.])
+    return np.array([10., 0., 0.])
 
 
 @pytest.fixture
@@ -52,7 +52,7 @@ def atom_locs_render():
 def universe():
     return seed(UniverseConfig(
         n_dims = 3,
-        n_atoms = 8,
+        n_atoms = 50,
     ))
 
 
@@ -92,7 +92,7 @@ def test_shoot_rays(camera_loc: Array, atom_locs_render: Array):
     hits = hits.astype("uint8")
     hits = numpy.array(hits)
     img = Image.fromarray(hits)
-    img.save("hits.jpg")
+    img.save("media/hits.jpg")
 
 
 def test_ambient_lighting(camera_loc: Array, atom_locs_render: Array):
@@ -111,7 +111,7 @@ def test_ambient_lighting(camera_loc: Array, atom_locs_render: Array):
     hits = hits.astype("uint8")
     hits = numpy.array(hits)
     img = Image.fromarray(hits)
-    img.save("ambient_light.jpg")
+    img.save("media/ambient_light.jpg")
 
 
 def test_direct_lighting(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
@@ -131,7 +131,7 @@ def test_direct_lighting(camera_loc: Array, atom_locs_render: Array, light_loc: 
     shadows = shadows.astype("uint8")
     shadows = numpy.array(shadows)
     img = Image.fromarray(shadows)
-    img.save("directional_light.jpg")
+    img.save("media/directional_light.jpg")
 
 
 def test_compute_shades(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
@@ -150,7 +150,7 @@ def test_compute_shades(camera_loc: Array, atom_locs_render: Array, light_loc: A
     shades = shades.astype("uint8")
     shades = numpy.array(shades)
     img = Image.fromarray(shades)
-    img.save("shades.jpg")
+    img.save("media/shades.jpg")
 
 
 def test_compute_colors(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
@@ -174,34 +174,36 @@ def test_compute_colors(camera_loc: Array, atom_locs_render: Array, light_loc: A
     shades = shades.astype("uint8")
     shades = numpy.array(shades)
     img = Image.fromarray(shades)
-    img.save("colors.jpg")
+    img.save("media/colors.jpg")
 
 
 def test_render_frames(universe: Universe, camera_loc: Array, light_loc: Array):
-    n_frames = 20
-    view_size = 640, 400
+    n_frame_chunks = 1
+    n_frames_in_chunk = 1
+    view_size = 256, 144
     w, h = view_size
-
-    universe = run(universe, n_frames)
     atom_colors = random.uniform(random.PRNGKey(42), (
         universe.universe_config.n_atoms,
         3
     ))
+    atom_colors = repeat(atom_colors, "a c -> f a c", f = n_frames_in_chunk)
+    out = cv2.VideoWriter('frames.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 25, (w, h))
 
-    atom_colors = repeat(atom_colors, "a c -> f a c", f = n_frames)
-    frames = render_frames(
-        universe.locs_history,
-        atom_colors,
-        view_size,
-        camera_loc,
-        light_loc
-    )
+    for chunk in range(n_frame_chunks):
+        universe = run(universe, n_frames_in_chunk)
 
-    assert frames.shape == (n_frames, h, w, 3)
+        frames = render_frames(
+            universe.locs_history[-n_frames_in_chunk:],
+            atom_colors,
+            view_size,
+            camera_loc,
+            light_loc
+        )
 
-    out = cv2.VideoWriter('frames.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 5, (w, h))
-    for frame in numpy.array(frames):
-        out.write(frame)
+        assert frames.shape == (n_frames_in_chunk, h, w, 3)
+
+        for frame in numpy.array(frames):
+            out.write(frame)
     out.release()
 
 

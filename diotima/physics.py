@@ -25,9 +25,9 @@ def default_physics_config(n_elems: int):
     return PhysicsConfig(
         np.tile(4.0, (n_elems)),
         np.tile(1.0, (n_elems)),
-        np.tile(0.022, (n_elems)),
+        np.tile(1.15, (n_elems)),
         np.tile(0.6, (n_elems, n_elems)),
-        np.tile(0.15, (n_elems, n_elems)),
+        np.tile(-1.5, (n_elems, n_elems)),
         np.tile(1.0, (n_elems, n_elems))
     )
 
@@ -161,7 +161,6 @@ def first_snapshot(atom_locs, universe_config):
             universe_config.n_dims,
         ))
     )
-
 
 
 def step(atom_locs, atom_elems, universe_config):

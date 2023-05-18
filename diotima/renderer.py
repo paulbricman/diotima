@@ -12,7 +12,7 @@ import PIL
 def signed_distance(
         atom_locs: Array,
         loc: Array,
-        atom_radius: float = 0.5,
+        atom_radius: float = 0.2,
         temperature: float = 1e-1,
 ):
     distances = norm(loc - atom_locs) - atom_radius
@@ -175,7 +175,7 @@ def compute_colors(
     atom_locs: Array,
     atom_colors: Array,
     locs: Array,
-    atom_radius: float = 0.5,
+    atom_radius: float = 0.2,
     temperature: float = 1e-1,
 ):
     def compute_color(

@@ -11,7 +11,7 @@ class UniverseConfig(NamedTuple):
     """
     Object containing universe configuration details.
     """
-    n_elems: int = 2
+    n_elems: int = 1
     n_atoms: int = 3
     n_dims: int = 2
     dt: float = 0.1
@@ -49,10 +49,10 @@ def seed(universe_config: UniverseConfig, key: prng.PRNGKeyArray = random.PRNGKe
     ))
     # TODO: Implement Gumbel-Softmax sampling based on elem_distrib in
     # universe_config
-    atom_elems = random.uniform(key_elems, shape=(
+    atom_elems = np.ones(shape=(
         universe_config.n_atoms,
         universe_config.n_elems
-    ))
+    )) / universe_config.n_elems
     return Universe(
         universe_config,
         atom_locs,
