@@ -28,6 +28,7 @@ class Universe(NamedTuple):
     atom_elems: Array
     locs_history: Array = None
     motions_history: Array = None
+    jac_history: Array = None
     step: int = 0
 
 
@@ -93,16 +94,18 @@ def run(universe: Universe, n_steps: int = 1) -> Universe:
             (universe.locs_history,
              state_history.locs)
         )
-    else:
-        updated_locs_history = state_history.locs
-
-    if universe.motions_history is not None:
         updated_motions_history = np.concatenate(
             (universe.motions_history,
              state_history.motions)
         )
+        updated_jac_history = np.concatenate(
+            (universe.jac_history,
+             state_history.jac)
+        )
     else:
+        updated_locs_history = state_history.locs
         updated_motions_history = state_history.motions
+        updated_jac_history = state_history.jac
 
     return Universe(
         universe.universe_config,
@@ -110,5 +113,6 @@ def run(universe: Universe, n_steps: int = 1) -> Universe:
         universe.atom_elems,
         updated_locs_history,
         updated_motions_history,
+        updated_jac_history,
         universe.step + n_steps
     )

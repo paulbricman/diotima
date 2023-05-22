@@ -2,7 +2,7 @@ from typing import NamedTuple
 from collections import namedtuple
 from jax._src import prng
 import jax.numpy as np
-from jax import Array, jit, vmap, grad, random
+from jax import Array, jit, vmap, grad, random, jacfwd, jacrev
 from jax.lax import scan
 from diotima.utils import norm, normalize
 from einops import rearrange
@@ -137,6 +137,7 @@ def motion(atom_locs, atom_elems, universe_config):
                 elem,
                 atom_locs,
                 universe_config).energies
+
             return energies[from_idx]
 
         loc_to_grad = grad(compute_energy_gradient)
@@ -150,6 +151,7 @@ def motion(atom_locs, atom_elems, universe_config):
 class Snapshot(NamedTuple):
     locs: Array
     motions: Array
+    jac: Array
 
 
 def first_snapshot(atom_locs, universe_config):
@@ -159,6 +161,10 @@ def first_snapshot(atom_locs, universe_config):
             universe_config.n_atoms,
             universe_config.n_atoms,
             universe_config.n_dims,
+        )),
+        np.zeros((
+            universe_config.n_atoms,
+            universe_config.n_atoms,
         ))
     )
 
@@ -169,6 +175,17 @@ def step(atom_locs, atom_elems, universe_config):
         atom_elems,
         universe_config
     )
+
     updated_locs = atom_locs + universe_config.dt * motions.sum(axis=1)
-    state = Snapshot(updated_locs, motions)
+
+    # How much each atom's location influences each atom's location next,
+    # aggregated across dimensions both for cause and effect.
+    pure_al_grad = lambda als: (als + universe_config.dt * motion(
+        als,
+        atom_elems,
+        universe_config
+    ).sum(axis=(1))).sum(axis=1)
+    jac = jacfwd(pure_al_grad)(atom_locs).sum(axis=2)
+
+    state = Snapshot(updated_locs, motions, jac)
     return state, state
