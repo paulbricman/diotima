@@ -1,2 +1,4 @@
 tests/media/*
 *.egg-info
+__pycache__/*
+diotima/__pycache__/*
