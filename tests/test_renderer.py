@@ -182,7 +182,7 @@ def test_render_frames(universe: Universe, camera_loc: Array, light_loc: Array):
     n_frames_in_chunk = 1
     view_size = 256, 144
     w, h = view_size
-    atom_colors = random.uniform(random.PRNGKey(42), (
+    atom_colors = random.uniform(random.PRNGKey(0), (
         universe.universe_config.n_atoms,
         3
     ))

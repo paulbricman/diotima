@@ -48,12 +48,13 @@ def seed(universe_config: UniverseConfig, key: prng.PRNGKeyArray = random.PRNGKe
         universe_config.n_atoms,
         universe_config.n_dims
     ))
-    # TODO: Implement Gumbel-Softmax sampling based on elem_distrib in
-    # universe_config
-    atom_elems = np.ones(shape=(
+    atom_elems = physics.elem_distrib_to_elems(
         universe_config.n_atoms,
-        universe_config.n_elems
-    )) / universe_config.n_elems
+        universe_config.n_elems,
+        universe_config.elem_distrib,
+        key_elems
+    )
+
     return Universe(
         universe_config,
         atom_locs,
@@ -61,13 +62,14 @@ def seed(universe_config: UniverseConfig, key: prng.PRNGKeyArray = random.PRNGKe
     )
 
 
-def run(universe: Universe, n_steps: int = 1) -> Universe:
+def run(universe: Universe, n_steps: int = 1, get_jac: bool = False) -> Universe:
     """
     Run universe `n_steps` forward.
 
     Args:
         universe: Starting universe to run forward.
         n_steps: Number of steps to run universe forward.
+        get_jac: Whether to also compute the grad-based causal graph.
 
     Returns:
         Update universe object.
@@ -76,7 +78,8 @@ def run(universe: Universe, n_steps: int = 1) -> Universe:
         return physics.step(
             state.locs,
             universe.atom_elems,
-            universe.universe_config
+            universe.universe_config,
+            get_jac
         )
 
     last_state, state_history = scan(
@@ -99,9 +102,8 @@ def run(universe: Universe, n_steps: int = 1) -> Universe:
              state_history.motions)
         )
         updated_jac_history = np.concatenate(
-            (universe.jac_history,
-             state_history.jac)
-        )
+                (universe.jac_history,
+                 state_history.jac))
     else:
         updated_locs_history = state_history.locs
         updated_motions_history = state_history.motions

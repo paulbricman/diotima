@@ -3,10 +3,10 @@ from diotima.physics import *
 from einops import repeat
 import matplotlib.pyplot as plt
 
-n_steps = 1000
+n_steps = 10
 universe_config = UniverseConfig(
-    n_elems = 1,
-    n_atoms = 100
+    n_elems = 4,
+    n_atoms = 20
 )
 universe = seed(universe_config)
 universe = run(universe, n_steps)

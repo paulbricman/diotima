@@ -4,8 +4,9 @@ from jax._src import prng
 import jax.numpy as np
 from jax import Array, jit, vmap, grad, random, jacfwd, jacrev
 from jax.lax import scan
+from jax.nn import softmax
 from diotima.utils import norm, normalize
-from einops import rearrange
+from einops import rearrange, repeat
 
 
 class PhysicsConfig(NamedTuple):
@@ -33,7 +34,25 @@ def default_physics_config(n_elems: int):
 
 
 def default_elem_distrib(n_elems: int):
-    return np.ones((n_elems,)) / n_elems
+    return random.uniform(
+        random.PRNGKey(0),
+        (n_elems,)
+    )
+
+
+def elem_distrib_to_elems(
+        n_atoms: int,
+        n_elems: int,
+        elem_distrib: Array,
+        key: prng.PRNGKeyArray = random.PRNGKey(0),
+        temperature: float = 0.1
+):
+    probs = softmax(elem_distrib / temperature)
+    logprobs = np.log(probs)
+    noise = random.gumbel(key, shape=(n_atoms, n_elems))
+    perturbed = repeat(probs, "e -> a e", a=n_atoms) + noise
+    smooth = softmax(perturbed, axis=1)
+    return smooth
 
 
 def valid_physics_config(physics_config: PhysicsConfig, n_elems: int):
@@ -169,7 +188,7 @@ def first_snapshot(atom_locs, universe_config):
     )
 
 
-def step(atom_locs, atom_elems, universe_config):
+def step(atom_locs, atom_elems, universe_config, get_jac: bool = False):
     motions = motion(
         atom_locs,
         atom_elems,
@@ -178,14 +197,19 @@ def step(atom_locs, atom_elems, universe_config):
 
     updated_locs = atom_locs + universe_config.dt * motions.sum(axis=1)
 
-    # How much each atom's location influences each atom's location next,
-    # aggregated across dimensions both for cause and effect.
-    pure_al_grad = lambda als: (als + universe_config.dt * motion(
-        als,
-        atom_elems,
-        universe_config
-    ).sum(axis=(1))).sum(axis=1)
-    jac = np.linalg.norm(jacfwd(pure_al_grad)(atom_locs), axis=2)
+    jac = np.zeros((
+            universe_config.n_atoms,
+            universe_config.n_atoms,
+        ))
+    if get_jac:
+        # How much each atom's location influences each atom's location next,
+        # aggregated across dimensions both for cause and effect.
+        pure_al_grad = lambda als: (als + universe_config.dt * motion(
+            als,
+            atom_elems,
+            universe_config
+        ).sum(axis=(1))).sum(axis=1)
+        jac = np.linalg.norm(jacfwd(pure_al_grad)(atom_locs), axis=2)
 
     state = Snapshot(updated_locs, motions, jac)
     return state, state
