@@ -45,7 +45,7 @@ def elem_distrib_to_elems(
         n_elems: int,
         elem_distrib: Array,
         key: prng.PRNGKeyArray = random.PRNGKey(0),
-        temperature: float = 0.1
+        temperature: float = 1e-4
 ):
     probs = softmax(elem_distrib / temperature)
     logprobs = np.log(probs)
@@ -130,17 +130,18 @@ def compute_repulsion_fields(distances, universe_config):
         np.arange(universe_config.n_elems))
 
 
-def compute_fields(loc, atom_locs, universe_config):
+def compute_fields(loc, atom_locs, atom_elems, universe_config):
     distances = norm(loc - atom_locs)
     matters = compute_matter_fields(distances, universe_config)
+    matters = matters * atom_elems.T
     attractions = compute_attraction_fields(matters, universe_config)
     repulsions = compute_repulsion_fields(distances, universe_config)
     energies = repulsions - attractions
     return Fields(matters, attractions, repulsions, energies)
 
 
-def compute_element_weighted_fields(loc, elem, atom_locs, universe_config):
-    unweighted_fields = compute_fields(loc, atom_locs, universe_config)
+def compute_element_weighted_fields(loc, elem, atom_locs, atom_elems, universe_config):
+    unweighted_fields = compute_fields(loc, atom_locs, atom_elems, universe_config)
     matters = (unweighted_fields.matters.T * elem).T.sum(axis=0)
     attractions = (unweighted_fields.attractions.T * elem).T.sum(axis=(0, 1))
     repulsions = (unweighted_fields.repulsions.T * elem).T.sum(axis=(0, 1))
@@ -155,6 +156,7 @@ def motion(atom_locs, atom_elems, universe_config):
                 loc,
                 elem,
                 atom_locs,
+                atom_elems,
                 universe_config).energies
 
             return energies[from_idx]

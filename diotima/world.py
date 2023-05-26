@@ -7,16 +7,33 @@ from jax.lax import scan
 import diotima.physics as physics
 
 
-class UniverseConfig(NamedTuple):
+class UniverseConfig():
     """
     Object containing universe configuration details.
     """
-    n_elems: int = 1
-    n_atoms: int = 3
-    n_dims: int = 2
-    dt: float = 0.1
-    physics_config: physics.PhysicsConfig = physics.default_physics_config(n_elems)
-    elem_distrib: Array = physics.default_elem_distrib(n_elems)
+    def __init__(
+            self,
+            n_elems: int = 3,
+            n_atoms: int = 2,
+            n_dims: int = 2,
+            dt: float = 0.1,
+            physics_config: Array = None,
+            elem_distrib: Array = None,
+    ):
+        self.n_elems = n_elems
+        self.n_atoms = n_atoms
+        self.n_dims = n_dims
+        self.dt = dt
+
+        if physics_config:
+            self.physics_config = physics_config
+        else:
+            self.physics_config = physics.default_physics_config(n_elems)
+
+        if elem_distrib:
+            self.elem_distrib = elem_distrib
+        else:
+            self.elem_distrib = physics.default_elem_distrib(n_elems)
 
 
 class Universe(NamedTuple):

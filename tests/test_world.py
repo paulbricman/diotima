@@ -45,7 +45,6 @@ def test_one_step(universe: Universe):
 
 def test_run(universe: Universe):
     parallel_universe = deepcopy(universe)
-    print(parallel_universe.locs_history)
     parallel_universe2 = run(parallel_universe, 2)
     universe1 = run(universe)
     universe2 = run(universe1)

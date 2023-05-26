@@ -3,10 +3,10 @@ from diotima.physics import *
 from einops import repeat
 import matplotlib.pyplot as plt
 
-n_steps = 10
+n_steps = 1000
 universe_config = UniverseConfig(
-    n_elems = 4,
-    n_atoms = 20
+    n_elems = 2,
+    n_atoms = 50
 )
 universe = seed(universe_config)
 universe = run(universe, n_steps)
@@ -17,6 +17,7 @@ def get_energy(atom_locs: Array, atom_elems: Array):
                         loc,
                         elem,
                         atom_locs,
+                        atom_elems,
                         universe_config
                     ))(atom_locs, atom_elems).energies.sum()
 
