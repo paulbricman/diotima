@@ -187,7 +187,7 @@ def test_render_frames(universe: Universe, camera_loc: Array, light_loc: Array):
         3
     ))
     atom_colors = repeat(atom_colors, "a c -> f a c", f = n_frames_in_chunk)
-    out = cv2.VideoWriter('frames.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 25, (w, h))
+    out = cv2.VideoWriter('media/frames.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 25, (w, h))
 
     for chunk in range(n_frame_chunks):
         universe = run(universe, n_frames_in_chunk)
