@@ -837,3 +837,51 @@ class EmbeddingDecoder(hk.Module):
                 self._vocab_size], init=jnp.zeros)
         output = output + bias
         return output.reshape([batch_size, seq_len, self._vocab_size])
+
+
+class DynamicPointCloudPreprocessor(hk.Module):
+    """Dynamic point cloud preprocessing for Perceiver Encoder."""
+
+    def __init__(
+            self,
+            position_encoding_type: str = 'fourier',
+            concat_or_add_pos: str = 'concat',
+            name: Optional[str] = None,
+            **position_encoding_kwargs):
+        super().__init__(name=name)
+
+        if concat_or_add_pos not in ['concat', 'add']:
+            raise ValueError(
+                f'Invalid value {concat_or_add_pos} for concat_or_add_pos.')
+
+        self._concat_or_add_pos = concat_or_add_pos
+
+        # Partially construct the positional encoding function.
+        # We fully construct it when we know the input size.
+        self._positional_encoding_ctor = functools.partial(
+            position_encoding.build_position_encoding,
+            position_encoding_type=position_encoding_type,
+            **position_encoding_kwargs)
+
+    def _build_network_inputs(
+            self, inputs: jnp.ndarray,
+            pos: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Construct the final input, including position encoding."""
+        batch_size = inputs.shape[0]
+        index_dims = inputs.shape[1:-1]
+
+        # Construct the position encoding.
+        pos_enc = self._positional_encoding_ctor(
+            index_dims=index_dims)(batch_size=batch_size, pos=pos)
+
+        if self._concat_or_add_pos == 'concat':
+            inputs_with_pos = jnp.concatenate([inputs, pos_enc], axis=-1)
+        elif self._concat_or_add_pos == 'add':
+            inputs_with_pos = inputs + pos_enc
+
+        return inputs_with_pos, inputs
+
+    def __call__(self, inputs: jnp.ndarray,
+                 pos: Optional[jnp.ndarray] = None) -> PreprocessorOutputT:
+        inputs, inputs_without_pos = self._build_network_inputs(inputs, pos)
+        return inputs, None, inputs_without_pos
