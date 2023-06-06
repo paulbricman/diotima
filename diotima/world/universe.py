@@ -1,16 +1,19 @@
+import diotima.world.physics as physics
+
+import jax
+import jax.numpy as jnp
+from jax._src.prng import PRNGKeyArray
+from jax import Array
+
 from typing import NamedTuple
 from collections import namedtuple
-from jax._src import prng
-import jax.numpy as np
-from jax import Array, jit, vmap, grad, random
-from jax.lax import scan
-import diotima.physics as physics
 
 
 class UniverseConfig():
     """
     Object containing universe configuration details.
     """
+
     def __init__(
             self,
             n_elems: int = 3,
@@ -49,7 +52,8 @@ class Universe(NamedTuple):
     step: int = 0
 
 
-def seed(universe_config: UniverseConfig, key: prng.PRNGKeyArray = random.PRNGKey(0)) -> Universe:
+def seed(universe_config: UniverseConfig,
+         key: PRNGKeyArray = jax.random.PRNGKey(0)) -> Universe:
     """
     Seed universe (i.e. assign pseudorandom atom locations and elements).
 
@@ -60,8 +64,8 @@ def seed(universe_config: UniverseConfig, key: prng.PRNGKeyArray = random.PRNGKe
     Returns:
         Seeded universe object.
     """
-    key_locs, key_elems = random.split(key, num=2)
-    atom_locs = random.normal(key_locs, shape=(
+    key_locs, key_elems = jax.random.split(key, num=2)
+    atom_locs = jax.random.normal(key_locs, shape=(
         universe_config.n_atoms,
         universe_config.n_dims
     ))
@@ -79,7 +83,8 @@ def seed(universe_config: UniverseConfig, key: prng.PRNGKeyArray = random.PRNGKe
     )
 
 
-def run(universe: Universe, n_steps: int = 1, get_jac: bool = False) -> Universe:
+def run(universe: Universe, n_steps: int = 1,
+        get_jac: bool = False) -> Universe:
     """
     Run universe `n_steps` forward.
 
@@ -99,7 +104,7 @@ def run(universe: Universe, n_steps: int = 1, get_jac: bool = False) -> Universe
             get_jac
         )
 
-    last_state, state_history = scan(
+    last_state, state_history = jax.lax.scan(
         pure_step,
         physics.first_snapshot(
             universe.atom_locs,
@@ -110,17 +115,17 @@ def run(universe: Universe, n_steps: int = 1, get_jac: bool = False) -> Universe
     )
 
     if universe.locs_history is not None:
-        updated_locs_history = np.concatenate(
+        updated_locs_history = jnp.concatenate(
             (universe.locs_history,
              state_history.locs)
         )
-        updated_motions_history = np.concatenate(
+        updated_motions_history = jnp.concatenate(
             (universe.motions_history,
              state_history.motions)
         )
-        updated_jac_history = np.concatenate(
-                (universe.jac_history,
-                 state_history.jac))
+        updated_jac_history = jnp.concatenate(
+            (universe.jac_history,
+             state_history.jac))
     else:
         updated_locs_history = state_history.locs
         updated_motions_history = state_history.motions

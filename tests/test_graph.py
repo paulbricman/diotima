@@ -1,5 +1,6 @@
-from diotima.graph import *
-from diotima.world import *
+from diotima.world.graph import *
+from diotima.world.universe import *
+
 import pytest
 import networkx as nx
 
@@ -16,8 +17,10 @@ def test_universe_to_graph(universe: Universe):
     universe = run(universe, 2, get_jac=True)
     graph = universe_to_graph(universe)
 
-    assert len(list(graph.nodes)) == universe.universe_config.n_atoms * (universe.step + 1)
-    assert len(list(graph.edges)) == universe.universe_config.n_atoms ** 2 * universe.step
+    assert len(list(graph.nodes)) == universe.universe_config.n_atoms * \
+        (universe.step + 1)
+    assert len(list(graph.edges)
+               ) == universe.universe_config.n_atoms ** 2 * universe.step
 
 
 def test_graph_to_embs(universe: Universe):

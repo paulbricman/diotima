@@ -1,9 +1,10 @@
-from diotima.world import UniverseConfig, Universe, seed, run
-import diotima.physics as physics
-import pytest
-import jax.numpy as np
+from diotima.world.universe import *
+from diotima.world.physics import *
+
+import jax.numpy as jnp
+
 from copy import deepcopy
-from jax import random
+import pytest
 
 
 @pytest.fixture
@@ -25,7 +26,7 @@ def test_init_universe(universe: Universe):
 
 
 def test_one_step(universe: Universe):
-    motions = physics.motion(
+    motions = motion(
         universe.atom_locs,
         universe.atom_elems,
         universe.universe_config
@@ -36,11 +37,12 @@ def test_one_step(universe: Universe):
     final_locs = universe.atom_locs
 
     # Given the one step run default, this should hold.
-    assert np.allclose(
+    assert jnp.allclose(
         init_locs +
         universe.universe_config.dt *
         motions.sum(axis=1),
-        final_locs)
+        final_locs
+    )
 
 
 def test_run(universe: Universe):
@@ -49,10 +51,12 @@ def test_run(universe: Universe):
     universe1 = run(universe)
     universe2 = run(universe1)
 
-    assert not np.allclose(universe1.atom_locs, universe2.atom_locs)
-    assert np.allclose(universe2.atom_locs, parallel_universe2.atom_locs)
+    assert not jnp.allclose(universe1.atom_locs, universe2.atom_locs)
+    assert jnp.allclose(universe2.atom_locs, parallel_universe2.atom_locs)
 
-    assert np.allclose(universe2.locs_history, parallel_universe2.locs_history)
+    assert jnp.allclose(
+        universe2.locs_history,
+        parallel_universe2.locs_history)
     assert universe2.locs_history.shape == (
         2,
         universe2.universe_config.n_atoms,

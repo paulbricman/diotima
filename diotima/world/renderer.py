@@ -1,11 +1,12 @@
-import jax.numpy as np
-from jax import Array, vmap, jit, grad
-from jax.nn import softmax
-from jax.lax import while_loop, cond, fori_loop
+from diotima.world.utils import norm, normalize
+
+import jax
+import jax.numpy as jnp
+from jax import Array
+from jax._src import prng
+
 from typing import Tuple
 from functools import partial
-from jax._src import prng
-from diotima.utils import norm, normalize
 import PIL
 
 
@@ -16,8 +17,8 @@ def signed_distance(
         temperature: float = 1e-1,
 ):
     distances = norm(loc - atom_locs) - atom_radius
-    weights = softmax(-distances / temperature)
-    distance = np.dot(distances, weights) / np.sum(weights)
+    weights = jax.nn.softmax(-distances / temperature)
+    distance = jnp.dot(distances, weights) / jnp.sum(weights)
     return distance
 
 
@@ -30,30 +31,43 @@ def raymarch(
         beyond_threshold: float = 1e5,
 ):
     pure_signed_distance = partial(signed_distance, atom_locs)
+
     def stop(state):
         idx, loc = state
-        true_func = lambda: True
-        false_func = lambda: False
+        def true_func(): return True
+        def false_func(): return False
 
         # March until close to a surface, exhausted steps, or ended up far off.
-        is_exhausted = cond(np.greater(idx, steps_threshold), true_func, false_func)
-        is_close = cond(np.isclose(
-            pure_signed_distance(loc),
-            0.,
-            atol=proximity_threshold
-        ), true_func, false_func)
-        is_beyond = cond(np.greater(norm(loc), beyond_threshold), true_func, false_func)
+        is_exhausted = jax.lax.cond(
+            jnp.greater(idx, steps_threshold),
+            true_func,
+            false_func
+        )
+        is_close = jax.lax.cond(
+            jnp.isclose(
+                pure_signed_distance(loc),
+                0.,
+                atol=proximity_threshold
+            ),
+            true_func,
+            false_func
+        )
+        is_beyond = jax.lax.cond(
+            jnp.greater(norm(loc), beyond_threshold),
+            true_func,
+            false_func
+        )
 
-        return cond(is_exhausted, false_func,
-                    lambda: cond(is_close, false_func,
-                                 lambda: cond(is_beyond, false_func, true_func)))
+        return jax.lax.cond(is_exhausted, false_func,
+                            lambda: jax.lax.cond(is_close, false_func,
+                                                 lambda: jax.lax.cond(is_beyond, false_func, true_func)))
 
     def step(state):
         idx, loc = state
         return idx + 1, loc + pure_signed_distance(loc) * dir
 
     dir = normalize(dir)
-    steps, final_loc = while_loop(stop, step, (0, init_loc))
+    steps, final_loc = jax.lax.while_loop(stop, step, (0, init_loc))
     return steps, final_loc
 
 
@@ -64,18 +78,24 @@ def spawn_rays(
 
 ):
     # Compute convenient unit vectors.
-    world_up = np.array([0., 1., 0.])
-    camera_right = np.cross(camera_forward, world_up)
-    camera_down = np.cross(camera_right, camera_forward)
-    R = normalize(np.vstack([
+    world_up = jnp.array([0., 1., 0.])
+    camera_right = jnp.cross(camera_forward, world_up)
+    camera_down = jnp.cross(camera_right, camera_forward)
+
+    R = jnp.vstack([
         camera_right,
         camera_down,
         camera_forward
-    ]))
+    ])
+    R = normalize(R)
     w, h = view_size
     fy = fx / w * h
-    y, x = np.mgrid[fy:-fy:h * 1j, -fx:fx:w * 1j].reshape(2, -1)
-    return normalize(np.c_[x, y, np.ones_like(x)]) @ R
+    y, x = jnp.mgrid[fy:-fy:h * 1j, -fx:fx:w * 1j].reshape(2, -1)
+
+    out = jnp.c_[x, y, jnp.ones_like(x)]
+    out = normalize(out)
+    out = out @ R
+    return out
 
 
 def shoot_rays(
@@ -87,7 +107,7 @@ def shoot_rays(
     ray_dirs = spawn_rays(-camera_loc, view_size)
     pure_signed_distance = partial(signed_distance, atom_locs)
     pure_raymarch = partial(raymarch, atom_locs, camera_loc)
-    steps, hits = vmap(pure_raymarch)(ray_dirs)
+    steps, hits = jax.vmap(pure_raymarch)(ray_dirs)
     return steps, hits
 
 
@@ -96,7 +116,7 @@ def compute_ambient_lighting(
         atom_locs: Array
 ):
     pure_signed_distance = partial(signed_distance, atom_locs)
-    raw_normals = vmap(grad(pure_signed_distance))(hits)
+    raw_normals = jax.vmap(jax.grad(pure_signed_distance))(hits)
     return raw_normals
 
 
@@ -117,31 +137,44 @@ def raymarch_lights(
     ):
         def stop(state):
             idx, traveled, shadow = state
-            true_func = lambda: True
-            false_func = lambda: False
+            def true_func(): return True
+            def false_func(): return False
 
             # March until close to a surface, or exhausted steps.
-            is_exhausted = cond(np.greater(idx, steps_threshold), true_func, false_func)
-            is_close = cond(np.isclose(
-                pure_signed_distance(src + dir * traveled),
-                0.,
-                atol=proximity_threshold
-            ), true_func, false_func)
-            is_beyond = cond(np.greater(traveled, beyond_threshold), true_func, false_func)
+            is_exhausted = jax.lax.cond(
+                jnp.greater(idx, steps_threshold),
+                true_func,
+                false_func
+            )
+            is_close = jax.lax.cond(
+                jnp.isclose(
+                    pure_signed_distance(src + dir * traveled),
+                    0.,
+                    atol=proximity_threshold
+                ),
+                true_func,
+                false_func
+            )
+            is_beyond = jax.lax.cond(
+                jnp.greater(traveled, beyond_threshold),
+                true_func,
+                false_func
+            )
 
-            return cond(is_exhausted, false_func,
-                        lambda: cond(is_close, false_func,
-                                     lambda: cond(is_beyond, false_func, true_func)))
+            return jax.lax.cond(is_exhausted, false_func,
+                                lambda: jax.lax.cond(is_close, false_func,
+                                                     lambda: jax.lax.cond(is_beyond, false_func, true_func)))
 
         def step(state):
             idx, traveled, shadow = state
             d = pure_signed_distance(src + dir * traveled)
-            return idx + 1, traveled + d, np.clip(hardness * d / traveled, 0, shadow)
+            return idx + 1, traveled + \
+                d, jnp.clip(hardness * d / traveled, 0, shadow)
 
-        steps, traveled, shadow = while_loop(stop, step, (0, 1., 1.0))
+        steps, traveled, shadow = jax.lax.while_loop(stop, step, (0, 1., 1.0))
         return steps, traveled, shadow
 
-    shadows = vmap(partial(raymarch_light))(srcs)
+    shadows = jax.vmap(partial(raymarch_light))(srcs)
     return shadows
 
 
@@ -166,7 +199,7 @@ def compute_shades(
         light = 0.7 * diffuse + 0.1 * ambient
         return color * light + spec
 
-    shades = vmap(compute_shade)(colors, shadows, raw_normals, ray_dirs)
+    shades = jax.vmap(compute_shade)(colors, shadows, raw_normals, ray_dirs)
     shades = shades ** (1.0 / 2.2)
     return shades
 
@@ -182,11 +215,11 @@ def compute_colors(
         loc: Array
     ):
         distances = norm(loc - atom_locs) - atom_radius
-        weights = softmax(-distances / temperature)
+        weights = jax.nn.softmax(-distances / temperature)
         color = atom_colors.T @ weights
         return color
 
-    return vmap(compute_color)(locs)
+    return jax.vmap(compute_color)(locs)
 
 
 def render_frames(
@@ -207,13 +240,18 @@ def render_frames(
         steps, traveled, shadows = raymarch_lights(hits, light_loc, atom_locs)
         ray_dirs = spawn_rays(-camera_loc, view_size)
         colors = compute_colors(atom_locs, atom_colors, hits)
-        shades = compute_shades(colors, shadows, raw_normals, light_loc, ray_dirs)
+        shades = compute_shades(
+            colors,
+            shadows,
+            raw_normals,
+            light_loc,
+            ray_dirs)
 
         shades = shades.reshape(h, w, 3)
         shades = shades * 255
         shades = shades.astype("uint8")
-        shades = np.array(shades)
+        shades = jnp.array(shades)
 
         return shades
 
-    return vmap(render_frame)(locs_history, atom_colors_by_timestep)
+    return jax.vmap(render_frame)(locs_history, atom_colors_by_timestep)

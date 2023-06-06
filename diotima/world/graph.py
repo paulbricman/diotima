@@ -1,9 +1,11 @@
-from jax import Array, vmap
-from diotima.world import Universe
+from diotima.world.universe import Universe
+
+import jax.numpy as jnp
+from jax import Array
+
 import networkx as nx
-import jax.numpy as np
-from einops import rearrange
 from node2vec import Node2Vec
+from einops import rearrange
 
 
 def universe_to_graph(universe: Universe) -> nx.Graph:
@@ -37,6 +39,16 @@ def graph_to_embs(
         p: float = 1.0,
         q: float = 1.0
 ):
-    node2vec = Node2Vec(graph, dimensions, walk_length, num_walks, workers, p, q)
-    model = node2vec.fit(window=window, min_count=min_count, batch_words=batch_words)
-    return np.array(model.wv.get_normed_vectors())
+    node2vec = Node2Vec(
+        graph,
+        dimensions,
+        walk_length,
+        num_walks,
+        workers,
+        p,
+        q)
+    model = node2vec.fit(
+        window=window,
+        min_count=min_count,
+        batch_words=batch_words)
+    return jnp.array(model.wv.get_normed_vectors())

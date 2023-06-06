@@ -1,29 +1,30 @@
+from diotima.world.renderer import *
+from diotima.world.universe import *
+
+from jax import Array
+import jax.numpy as jnp
+import numpy as np
+
+import cv2
 import io
-import jax.numpy as np
-import numpy
-from diotima.renderer import *
-from jax import Array, random
 import pytest
 from PIL import Image
-from diotima.utils import norm
-from diotima.world import Universe, UniverseConfig, seed, run
 from einops import repeat
-import cv2
 
 
 @pytest.fixture
 def camera_loc():
-    return np.array([10., 0., 0.])
+    return jnp.array([10., 0., 0.])
 
 
 @pytest.fixture
 def light_loc():
-    return np.array([1., 0., -1.2])
+    return jnp.array([1., 0., -1.2])
 
 
 @pytest.fixture
 def atom_locs_hit():
-    return np.array([
+    return jnp.array([
         [0., 0., 0.],
         [0., 1., 0.3],
         [-0.4, -0.8, -0.4],
@@ -33,14 +34,14 @@ def atom_locs_hit():
 
 @pytest.fixture
 def atom_locs_miss():
-    return np.array([
+    return jnp.array([
         [0., 2., 0.],
     ])
 
 
 @pytest.fixture
 def atom_locs_render():
-    return np.array([
+    return jnp.array([
         [0.4, -0.2, -0.4],
         [0., 0.2, 0.3],
         [-0.4, -0.8, -0.6],
@@ -51,8 +52,8 @@ def atom_locs_render():
 @pytest.fixture
 def universe():
     return seed(UniverseConfig(
-        n_dims = 3,
-        n_atoms = 50,
+        n_dims=3,
+        n_atoms=50,
     ))
 
 
@@ -61,7 +62,8 @@ def test_signed_distance(camera_loc: Array, atom_locs_render: Array):
     assert distance.size == 1
 
 
-def test_raymarch(camera_loc: Array, atom_locs_hit: Array, atom_locs_miss: Array):
+def test_raymarch(camera_loc: Array, atom_locs_hit: Array,
+                  atom_locs_miss: Array):
     steps, final_loc = raymarch(atom_locs_hit, camera_loc, -camera_loc)
     assert steps < 5
 
@@ -90,7 +92,7 @@ def test_shoot_rays(camera_loc: Array, atom_locs_render: Array):
 
     hits = hits % 1. * 255
     hits = hits.astype("uint8")
-    hits = numpy.array(hits)
+    hits = np.array(hits)
     img = Image.fromarray(hits)
     img.save("media/hits.jpg")
 
@@ -109,16 +111,18 @@ def test_ambient_lighting(camera_loc: Array, atom_locs_render: Array):
 
     hits = hits * 255
     hits = hits.astype("uint8")
-    hits = numpy.array(hits)
+    hits = np.array(hits)
     img = Image.fromarray(hits)
     img.save("media/ambient_light.jpg")
 
 
-def test_direct_lighting(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
+def test_direct_lighting(
+        camera_loc: Array, atom_locs_render: Array, light_loc: Array):
     view_size = 640, 400
     w, h = view_size
     steps, hits = shoot_rays(view_size, camera_loc, atom_locs_render)
-    steps, traveled, shadows = raymarch_lights(hits, light_loc, atom_locs_render)
+    steps, traveled, shadows = raymarch_lights(
+        hits, light_loc, atom_locs_render)
     steps = steps.reshape(h, w)
     traveled = traveled.reshape(h, w)
     shadows = shadows.reshape(h, w)
@@ -129,38 +133,43 @@ def test_direct_lighting(camera_loc: Array, atom_locs_render: Array, light_loc: 
 
     shadows = shadows * 255
     shadows = shadows.astype("uint8")
-    shadows = numpy.array(shadows)
+    shadows = np.array(shadows)
     img = Image.fromarray(shadows)
     img.save("media/directional_light.jpg")
 
 
-def test_compute_shades(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
+def test_compute_shades(
+        camera_loc: Array, atom_locs_render: Array, light_loc: Array):
     view_size = 640, 400
     w, h = view_size
     steps, hits = shoot_rays(view_size, camera_loc, atom_locs_render)
     raw_normals = compute_ambient_lighting(hits, atom_locs_render)
-    steps, traveled, shadows = raymarch_lights(hits, light_loc, atom_locs_render)
+    steps, traveled, shadows = raymarch_lights(
+        hits, light_loc, atom_locs_render)
     ray_dirs = spawn_rays(-camera_loc, view_size)
-    shades = compute_shades(np.ones((w * h, 3)), shadows, raw_normals, light_loc, ray_dirs)
+    shades = compute_shades(np.ones((w * h, 3)), shadows,
+                            raw_normals, light_loc, ray_dirs)
     shades = shades.reshape(h, w, 3)
 
     assert shades.shape == (h, w, 3)
 
     shades = shades * 255
     shades = shades.astype("uint8")
-    shades = numpy.array(shades)
+    shades = np.array(shades)
     img = Image.fromarray(shades)
     img.save("media/shades.jpg")
 
 
-def test_compute_colors(camera_loc: Array, atom_locs_render: Array, light_loc: Array):
+def test_compute_colors(
+        camera_loc: Array, atom_locs_render: Array, light_loc: Array):
     view_size = 640, 400
     w, h = view_size
     steps, hits = shoot_rays(view_size, camera_loc, atom_locs_render)
     raw_normals = compute_ambient_lighting(hits, atom_locs_render)
-    steps, traveled, shadows = raymarch_lights(hits, light_loc, atom_locs_render)
+    steps, traveled, shadows = raymarch_lights(
+        hits, light_loc, atom_locs_render)
     ray_dirs = spawn_rays(-camera_loc, view_size)
-    atom_colors = random.uniform(random.PRNGKey(42), (
+    atom_colors = jax.random.uniform(jax.random.PRNGKey(42), (
         atom_locs_render.shape[0],
         3
     ))
@@ -172,22 +181,29 @@ def test_compute_colors(camera_loc: Array, atom_locs_render: Array, light_loc: A
 
     shades = shades * 255
     shades = shades.astype("uint8")
-    shades = numpy.array(shades)
+    shades = np.array(shades)
     img = Image.fromarray(shades)
     img.save("media/colors.jpg")
 
 
-def test_render_frames(universe: Universe, camera_loc: Array, light_loc: Array):
+def test_render_frames(
+        universe: Universe, camera_loc: Array, light_loc: Array):
     n_frame_chunks = 1
     n_frames_in_chunk = 1
     view_size = 256, 144
     w, h = view_size
-    atom_colors = random.uniform(random.PRNGKey(0), (
+    atom_colors = jax.random.uniform(jax.random.PRNGKey(0), (
         universe.universe_config.n_atoms,
         3
     ))
-    atom_colors = repeat(atom_colors, "a c -> f a c", f = n_frames_in_chunk)
-    out = cv2.VideoWriter('media/frames.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 25, (w, h))
+    atom_colors = repeat(atom_colors, "a c -> f a c", f=n_frames_in_chunk)
+    out = cv2.VideoWriter(
+        'media/frames.mp4',
+        cv2.VideoWriter_fourcc(
+            *'mp4v'),
+        25,
+        (w,
+         h))
 
     for chunk in range(n_frame_chunks):
         universe = run(universe, n_frames_in_chunk)
@@ -202,8 +218,6 @@ def test_render_frames(universe: Universe, camera_loc: Array, light_loc: Array):
 
         assert frames.shape == (n_frames_in_chunk, h, w, 3)
 
-        for frame in numpy.array(frames):
+        for frame in np.array(frames):
             out.write(frame)
     out.release()
-
-

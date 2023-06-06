@@ -1,11 +1,12 @@
+from diotima.world.utils import norm, normalize
+
+import jax
+import jax.numpy as jnp
+from jax import Array
+from jax._src.prng import PRNGKeyArray
+
 from typing import NamedTuple
 from collections import namedtuple
-from jax._src import prng
-import jax.numpy as np
-from jax import Array, jit, vmap, grad, random, jacfwd, jacrev
-from jax.lax import scan
-from jax.nn import softmax
-from diotima.utils import norm, normalize
 from einops import rearrange, repeat
 
 
@@ -24,18 +25,18 @@ class PhysicsConfig(NamedTuple):
 
 def default_physics_config(n_elems: int):
     return PhysicsConfig(
-        np.tile(4.0, (n_elems)),
-        np.tile(1.0, (n_elems)),
-        np.tile(1.15, (n_elems)),
-        np.tile(0.6, (n_elems, n_elems)),
-        np.tile(-1.5, (n_elems, n_elems)),
-        np.tile(1.0, (n_elems, n_elems))
+        jnp.tile(4.0, (n_elems)),
+        jnp.tile(1.0, (n_elems)),
+        jnp.tile(1.15, (n_elems)),
+        jnp.tile(0.6, (n_elems, n_elems)),
+        jnp.tile(-1.5, (n_elems, n_elems)),
+        jnp.tile(1.0, (n_elems, n_elems))
     )
 
 
 def default_elem_distrib(n_elems: int):
-    return random.uniform(
-        random.PRNGKey(0),
+    return jax.random.uniform(
+        jax.random.PRNGKey(0),
         (n_elems,)
     )
 
@@ -44,14 +45,14 @@ def elem_distrib_to_elems(
         n_atoms: int,
         n_elems: int,
         elem_distrib: Array,
-        key: prng.PRNGKeyArray = random.PRNGKey(0),
+        key: PRNGKeyArray = jax.random.PRNGKey(0),
         temperature: float = 1e-4
 ):
-    probs = softmax(elem_distrib / temperature)
-    logprobs = np.log(probs)
-    noise = random.gumbel(key, shape=(n_atoms, n_elems))
+    probs = jax.nn.softmax(elem_distrib / temperature)
+    logprobs = jnp.log(probs)
+    noise = jax.random.gumbel(key, shape=(n_atoms, n_elems))
     perturbed = repeat(probs, "e -> a e", a=n_atoms) + noise
-    smooth = softmax(perturbed, axis=1)
+    smooth = jax.nn.softmax(perturbed, axis=1)
     return smooth
 
 
@@ -68,7 +69,8 @@ def valid_physics_config(physics_config: PhysicsConfig, n_elems: int):
         physics_config.c_reps
     ]
 
-    return all([e.shape == (n_elems,) for e in elem_constants]) and all([e.shape == (n_elems, n_elems,) for e in elem_elem_constants])
+    return all([e.shape == (n_elems,) for e in elem_constants]) and all(
+        [e.shape == (n_elems, n_elems,) for e in elem_elem_constants])
 
 
 class Fields(NamedTuple):
@@ -82,7 +84,7 @@ class Fields(NamedTuple):
 
 
 def peak(x, mu, sigma):
-    return np.exp(-((x - mu) / sigma) ** 2)
+    return jnp.exp(-((x - mu) / sigma) ** 2)
 
 
 def compute_matter_fields(distances, universe_config):
@@ -93,8 +95,8 @@ def compute_matter_fields(distances, universe_config):
             universe_config.physics_config.sigma_ks[elem_idx]
         ) * universe_config.physics_config.w_ks[elem_idx]
 
-    return vmap(compute_matter_field)(
-        np.arange(universe_config.n_elems))
+    return jax.vmap(compute_matter_field)(
+        jnp.arange(universe_config.n_elems))
 
 
 def compute_attraction_fields(matters, universe_config):
@@ -107,12 +109,12 @@ def compute_attraction_fields(matters, universe_config):
             )
 
         # All attraction fields sent from element from_idx
-        return vmap(send_attraction_field)(
-            np.arange(universe_config.n_elems))
+        return jax.vmap(send_attraction_field)(
+            jnp.arange(universe_config.n_elems))
 
     # All attraction fields sent from all elements
-    return vmap(send_attraction_fields)(
-        np.arange(universe_config.n_elems))
+    return jax.vmap(send_attraction_fields)(
+        jnp.arange(universe_config.n_elems))
 
 
 def compute_repulsion_fields(distances, universe_config):
@@ -122,12 +124,12 @@ def compute_repulsion_fields(distances, universe_config):
                 (1.0 - distances).clip(0.0) ** 2)
 
         # All repulsion fields sent from element from_idx
-        return vmap(send_repulsion_field)(
-            np.arange(universe_config.n_elems))
+        return jax.vmap(send_repulsion_field)(
+            jnp.arange(universe_config.n_elems))
 
     # All repulsion fields sent from all elements
-    return vmap(send_repulsion_fields)(
-        np.arange(universe_config.n_elems))
+    return jax.vmap(send_repulsion_fields)(
+        jnp.arange(universe_config.n_elems))
 
 
 def compute_fields(loc, atom_locs, atom_elems, universe_config):
@@ -140,8 +142,10 @@ def compute_fields(loc, atom_locs, atom_elems, universe_config):
     return Fields(matters, attractions, repulsions, energies)
 
 
-def compute_element_weighted_fields(loc, elem, atom_locs, atom_elems, universe_config):
-    unweighted_fields = compute_fields(loc, atom_locs, atom_elems, universe_config)
+def compute_element_weighted_fields(
+        loc, elem, atom_locs, atom_elems, universe_config):
+    unweighted_fields = compute_fields(
+        loc, atom_locs, atom_elems, universe_config)
     matters = (unweighted_fields.matters.T * elem).T.sum(axis=0)
     attractions = (unweighted_fields.attractions.T * elem).T.sum(axis=(0, 1))
     repulsions = (unweighted_fields.repulsions.T * elem).T.sum(axis=(0, 1))
@@ -161,10 +165,11 @@ def motion(atom_locs, atom_elems, universe_config):
 
             return energies[from_idx]
 
-        loc_to_grad = grad(compute_energy_gradient)
-        return -vmap(loc_to_grad)(atom_locs, atom_elems)
+        loc_to_grad = jax.grad(compute_energy_gradient)
+        return -jax.vmap(loc_to_grad)(atom_locs, atom_elems)
 
-    motions = vmap(compute_energy_gradients)(np.arange(universe_config.n_atoms))
+    motions = jax.vmap(compute_energy_gradients)(
+        jnp.arange(universe_config.n_atoms))
     motions = rearrange(motions, "f t dims -> t f dims")
     return motions
 
@@ -178,12 +183,12 @@ class Snapshot(NamedTuple):
 def first_snapshot(atom_locs, universe_config):
     return Snapshot(
         atom_locs,
-        np.zeros((
+        jnp.zeros((
             universe_config.n_atoms,
             universe_config.n_atoms,
             universe_config.n_dims,
         )),
-        np.zeros((
+        jnp.zeros((
             universe_config.n_atoms,
             universe_config.n_atoms,
         ))
@@ -199,19 +204,19 @@ def step(atom_locs, atom_elems, universe_config, get_jac: bool = False):
 
     updated_locs = atom_locs + universe_config.dt * motions.sum(axis=1)
 
-    jac = np.zeros((
-            universe_config.n_atoms,
-            universe_config.n_atoms,
-        ))
+    jac = jnp.zeros((
+        universe_config.n_atoms,
+        universe_config.n_atoms,
+    ))
     if get_jac:
         # How much each atom's location influences each atom's location next,
         # aggregated across dimensions both for cause and effect.
-        pure_al_grad = lambda als: (als + universe_config.dt * motion(
+        def pure_al_grad(als): return (als + universe_config.dt * motion(
             als,
             atom_elems,
             universe_config
         ).sum(axis=(1))).sum(axis=1)
-        jac = np.linalg.norm(jacfwd(pure_al_grad)(atom_locs), axis=2)
+        jac = norm(jax.jacfwd(pure_al_grad)(atom_locs), axis=2)
 
     state = Snapshot(updated_locs, motions, jac)
     return state, state
