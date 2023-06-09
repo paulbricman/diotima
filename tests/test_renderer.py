@@ -50,11 +50,21 @@ def atom_locs_render():
 
 
 @pytest.fixture
-def universe():
-    return seed(UniverseConfig(
-        n_dims=3,
-        n_atoms=50,
-    ))
+def universe_config():
+    n_elems = 2
+    return UniverseConfig(
+            n_elems,
+            n_atoms=2,
+            n_dims=3,
+            dt=0.1,
+            physics_config=physics.default_physics_config(n_elems),
+            elem_distrib=physics.default_elem_distrib(n_elems)
+        )
+
+
+@pytest.fixture
+def universe(universe_config: UniverseConfig):
+    return seed(universe_config)
 
 
 def test_signed_distance(camera_loc: Array, atom_locs_render: Array):
@@ -207,6 +217,7 @@ def test_render_frames(
 
     for chunk in range(n_frame_chunks):
         universe = run(universe, n_frames_in_chunk)
+        print("test_renderer", universe.locs_history)
 
         frames = render_frames(
             universe.locs_history[-n_frames_in_chunk:],

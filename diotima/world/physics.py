@@ -218,5 +218,4 @@ def step(atom_locs, atom_elems, universe_config, get_jac: bool = False):
         ).sum(axis=(1))).sum(axis=1)
         jac = norm(jax.jacfwd(pure_al_grad)(atom_locs), axis=2)
 
-    state = Snapshot(updated_locs, motions, jac)
-    return state, state
+    return Snapshot(updated_locs, motions, jac)

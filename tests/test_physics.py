@@ -6,7 +6,7 @@ import pytest
 
 @pytest.fixture
 def universe_config():
-    return UniverseConfig()
+    return default_universe_config()
 
 
 @pytest.fixture

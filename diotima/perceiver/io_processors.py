@@ -58,7 +58,6 @@ def space_to_depth(
         spatial_block_size: int = 1) -> jnp.ndarray:
     """Space to depth transform."""
     if len(frames.shape) == 4:
-        print(type(frames), type(spatial_block_size))
         return einops.rearrange(
             frames, 'b (h dh) (w dw) c -> b h w (dh dw c)',
             dh=spatial_block_size, dw=spatial_block_size)

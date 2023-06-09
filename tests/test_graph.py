@@ -6,8 +6,13 @@ import networkx as nx
 
 
 @pytest.fixture
-def universe():
-    return seed(UniverseConfig())
+def universe_config():
+    return default_universe_config()
+
+
+@pytest.fixture
+def universe(universe_config: UniverseConfig):
+    return seed(universe_config)
 
 
 def test_universe_to_graph(universe: Universe):

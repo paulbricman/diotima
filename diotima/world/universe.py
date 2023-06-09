@@ -9,34 +9,29 @@ from typing import NamedTuple
 from collections import namedtuple
 
 
-class UniverseConfig():
+class UniverseConfig(NamedTuple):
     """
     Object containing universe configuration details.
     """
+    n_elems: int
+    n_atoms: int
+    n_dims: int
+    dt: float
+    physics_config: Array
+    elem_distrib: Array
 
-    def __init__(
-            self,
-            n_elems: int = 3,
-            n_atoms: int = 2,
-            n_dims: int = 2,
-            dt: float = 0.1,
-            physics_config: Array = None,
-            elem_distrib: Array = None,
-    ):
-        self.n_elems = n_elems
-        self.n_atoms = n_atoms
-        self.n_dims = n_dims
-        self.dt = dt
 
-        if physics_config:
-            self.physics_config = physics_config
-        else:
-            self.physics_config = physics.default_physics_config(n_elems)
+def default_universe_config():
+    n_elems = 3
 
-        if elem_distrib:
-            self.elem_distrib = elem_distrib
-        else:
-            self.elem_distrib = physics.default_elem_distrib(n_elems)
+    return UniverseConfig(
+        n_elems,
+        n_atoms=2,
+        n_dims=2,
+        dt=0.1,
+        physics_config=physics.default_physics_config(n_elems),
+        elem_distrib=physics.default_elem_distrib(n_elems)
+    )
 
 
 class Universe(NamedTuple):
@@ -84,7 +79,7 @@ def seed(universe_config: UniverseConfig,
 
 
 def run(universe: Universe, n_steps: int = 1,
-        get_jac: bool = False) -> Universe:
+        get_jac: bool = False, init_adv_opt = None) -> Universe:
     """
     Run universe `n_steps` forward.
 
@@ -97,22 +92,41 @@ def run(universe: Universe, n_steps: int = 1,
         Update universe object.
     """
     def pure_step(state, _):
-        return physics.step(
-            state.locs,
+        snapshot, adv_opt = state
+        new_snapshot = physics.step(
+            snapshot.locs,
             universe.atom_elems,
             universe.universe_config,
             get_jac
         )
 
+        if adv_opt:
+            key, subkey = jax.random.split(adv_opt.key, num=2)
+            delta = jax.random.normal(subkey, shape=(
+                universe.universe_config.n_atoms,
+                universe.universe_config.n_dims
+            ))
+            new_snapshot = physics.Snapshot(
+                new_snapshot.locs + delta,
+                new_snapshot.motions,
+                new_snapshot.jac
+            )
+            adv_opt = BrownianOptimizer(key)
+
+        state = new_snapshot, adv_opt
+        return state, state
+
     last_state, state_history = jax.lax.scan(
         pure_step,
-        physics.first_snapshot(
+        (physics.first_snapshot(
             universe.atom_locs,
             universe.universe_config
-        ),
+        ), init_adv_opt),
         None,
         n_steps
     )
+    last_state = last_state[0]
+    state_history = state_history[0]
 
     if universe.locs_history is not None:
         updated_locs_history = jnp.concatenate(
@@ -139,4 +153,57 @@ def run(universe: Universe, n_steps: int = 1,
         updated_motions_history,
         updated_jac_history,
         universe.step + n_steps
+    )
+
+
+class BrownianOptimizer(NamedTuple):
+    key: PRNGKeyArray
+
+
+def spawn_counterfactuals(
+        universe: Universe,
+        start: int,
+        n_cfs: int,
+        key: PRNGKeyArray = jax.random.PRNGKey(0),
+):
+    """
+    Instantiate new universes based on specified one, by adversarially optimizing from `start` into `n_cfs` counterfactuals.
+    """
+    assert start >= 0 and start < universe.step
+
+    # Isolate common thread.
+    common_thread = trim(universe, start)
+
+    # Split into n_cfs keys.
+    keys = jax.random.split(key, num=n_cfs)
+
+    # Run universes forward using adversarial optimizers
+    spawn_counterfactual = lambda key: run(
+        common_thread,
+        universe.step - start,
+        False,
+        BrownianOptimizer(key)
+    )
+    counterfactuals = jax.vmap(spawn_counterfactual)(keys)
+
+    return counterfactuals
+
+
+def trim(
+        universe: Universe,
+        until: int,
+):
+    """
+    Given universe, return universe as if only until `until` timestep.
+    """
+    assert until < universe.step
+
+    return Universe(
+        universe.universe_config,
+        universe.locs_history[until - 1],
+        universe.atom_elems,
+        universe.locs_history[:until],
+        universe.motions_history[:until],
+        universe.jac_history[:until],
+        until
     )
