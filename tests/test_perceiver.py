@@ -41,9 +41,17 @@ def test_data(config: UniverseDataConfig):
 
 
 def test_forward(config: UniverseDataConfig):
-    data = synth_data(config, n_univs=2, key=jax.random.PRNGKey(0))
+    n_univs = 2
+    data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
     rng = jax.random.PRNGKey(42)
-    transf_forward = hk.transform(raw_forward)
-    transf_forward.init(rng, data, config, True)
 
-    assert False
+    transf_forward = hk.transform_with_state(raw_forward)
+    params, state = transf_forward.init(rng, data, config, True)
+    out, state = transf_forward.apply(params, state, rng, data, config, True)
+
+    assert out.pred_locs_future.shape == (
+        n_univs * config.n_cfs,
+        config.steps - config.start,
+        int(out.universe_config.n_atoms[0][0]),
+        int(out.universe_config.n_dims[0][0])
+    )

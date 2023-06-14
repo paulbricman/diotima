@@ -9,7 +9,7 @@ from jax import Array
 import haiku as hk
 import optax
 
-from einops import repeat, rearrange
+from einops import repeat, rearrange, reduce
 from typing import Tuple, NamedTuple
 
 
@@ -64,9 +64,9 @@ def synth_data(config: UniverseDataConfig, n_univs: int, key: PRNGKeyArray):
 
     data = Data(
         atom_elems=rearrange(data.atom_elems, "univs cfs a e -> (univs cfs) a e"),
-        locs_history=rearrange(data.locs_history, "univs cfs t a l -> (univs cfs) t a l"),
+        locs_history=rearrange(data.locs_history, "univs cfs t a l -> (univs cfs) (t a) l"),
         idx_history=rearrange(data.idx_history, "univs cfs t -> (univs cfs) t"),
-        locs_future=rearrange(data.locs_future, "univs cfs t a l -> (univs cfs) t a l"),
+        locs_future=rearrange(data.locs_future, "univs cfs t a l -> (univs cfs) (t a) l"),
         universe_config=data.universe_config,
         pred_locs_future=None
     )
@@ -74,40 +74,67 @@ def synth_data(config: UniverseDataConfig, n_univs: int, key: PRNGKeyArray):
 
 
 def raw_forward(data: Data, config: UniverseDataConfig, is_training: bool):
-    input = repeat(data.atom_elems, "univs a e -> univs t a e", t=config.start)
-    space_pos = data.locs_history
-    time_pos = repeat(data.idx_history, "univs t -> univs t a 1", a=int(data.universe_config.n_atoms[0][0]))
-    pos = jnp.concatenate((space_pos, time_pos), axis=3)
+    n_dims = int(data.universe_config.n_dims[0][0])
+    n_atoms = int(data.universe_config.n_atoms[0][0])
+    future_steps = config.steps - config.start
+    atom_locs = rearrange(data.locs_history, "univs (t a) l -> t univs a l", a=n_atoms)[-1]
 
+    input = repeat(data.atom_elems, "univs a e -> univs (t a) e", t=config.start)
+    space_pos = data.locs_history
+    time_pos = repeat(data.idx_history, "univs t -> univs (t a) 1", a=n_atoms)
+    pos = jnp.concatenate((space_pos, time_pos), axis=2)
+
+    # TODO: Move config to separate get_config
     preprocessor = DynamicPointCloudPreprocessor(
         fourier_position_encoding_kwargs=dict(
-          num_bands=2,
-          max_resolution=[1] * int(data.universe_config.n_dims[0][0]),
-          sine_only=False,
-          concat_pos=True,
-      )
+            num_bands=1,
+            max_resolution=[1],
+            sine_only=True,
+            concat_pos=False,
+        )
     )
-    encoder = PerceiverEncoder()
+    encoder = PerceiverEncoder(
+        z_index_dim=5,
+        num_z_channels=8
+    )
     decoder = BasicDecoder(
-        output_num_channels=int(data.universe_config.n_dims[0][0]),
+        output_num_channels=n_dims,
         position_encoding_type="fourier",
         fourier_position_encoding_kwargs=dict(
-          num_bands=2,
-          max_resolution=[1] * int(data.universe_config.n_dims[0][0]),
-          sine_only=False,
-          concat_pos=True,
-      )
+            num_bands=1,
+            max_resolution=[1],
+            sine_only=True,
+            concat_pos=False,
+        )
     )
 
     input, _, input_without_pos = preprocessor(input, pos)
     encoder_query = encoder.latents(input)
-    decoder_query = decoder.decoder_query(input, None, input_without_pos)
-    # TODO: Only use last timestep to build decoder queries
 
-    latents = encoder(input, encoder_query, is_training=is_training, input_mask=input_mask)
-    outputs = decoder(decoder_query, latents, is_training=is_training, query_mask=query_mask)
-    # TODO: Decode one latent at a time for slot attention
-    # TODO: Scan the application of outputs for forecast.
+    decoder_query, _, decoder_query_without_pos = preprocessor(
+        data.atom_elems,
+        atom_locs
+    )
+
+    latents = encoder(input, encoder_query, is_training=is_training)
+
+    def decode_slot(latent):
+        latent = rearrange(latent, "b z_dim -> b 1 z_dim")
+        return decoder(decoder_query, latent, is_training=is_training)
+
+    one_step_preds = jax.vmap(decode_slot, in_axes=1)(latents)
+    agg_one_step_preds = reduce(one_step_preds, "z b a l -> b a l", "sum")
+
+    def preds_to_forecast():
+        def inject_one_step(state, _):
+            state = state + agg_one_step_preds
+            return state, state
+
+        forecast = jax.lax.scan(inject_one_step, atom_locs, None, future_steps)
+        forecast = rearrange(forecast[1], "t b a l -> b t a l")
+        return forecast
+
+    forecast = preds_to_forecast()
 
     return Data(
         data.atom_elems,

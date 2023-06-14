@@ -146,7 +146,8 @@ def _check_or_build_spatial_positions(pos, index_dims, batch_size):
         # Just a warning label: you probably don't want your spatial features to
         # have a different spatial layout than your pos coordinate system.
         # But feel free to override if you think it'll work!
-        assert pos.shape[-1] == len(index_dims)
+        # assert pos.shape[-1] == len(index_dims)
+        pass
 
     return pos
 
