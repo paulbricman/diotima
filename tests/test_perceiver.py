@@ -3,6 +3,7 @@ from diotima.perceiver.optimize import *
 import jax
 import jax.numpy as jnp
 import haiku as hk
+import optax
 
 import pytest
 
@@ -45,13 +46,43 @@ def test_forward(config: UniverseDataConfig):
     data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
     rng = jax.random.PRNGKey(42)
 
-    transf_forward = hk.transform_with_state(raw_forward)
-    params, state = transf_forward.init(rng, data, config, True)
-    out, state = transf_forward.apply(params, state, rng, data, config, True)
+    exp = Experiment()
+    params, state = exp.forward.init(rng, data, config, True)
+    out, state = exp.forward.apply(params, state, rng, data, config, True)
 
     assert out.pred_locs_future.shape == (
         n_univs * config.n_cfs,
-        config.steps - config.start,
-        int(out.universe_config.n_atoms[0][0]),
+        (config.steps - config.start) * int(out.universe_config.n_atoms[0][0]),
         int(out.universe_config.n_dims[0][0])
     )
+
+
+def test_loss(config: UniverseDataConfig):
+    n_univs = 2
+    data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
+    rng = jax.random.PRNGKey(42)
+
+    exp = Experiment()
+    params, state = exp.forward.init(rng, data, config, True)
+
+    optimizer = optax.adam(1e-4)
+    opt_state = optimizer.init(params)
+    error = exp.loss(params, state, opt_state, rng, data, config)
+
+    assert error.size == 1
+
+
+def test_backward(config: UniverseDataConfig):
+    n_univs = 2
+    data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
+    rng = jax.random.PRNGKey(42)
+
+    exp = Experiment()
+    params, state = exp.forward.init(rng, data, config, True)
+
+    optim = optax.adam(1e-4)
+    opt_state = optim.init(params)
+    new_params, new_state, new_opt_state = exp.backward(params, state, opt_state, rng, optim, data, config)
+
+    assert params is params
+    assert new_params is not params
