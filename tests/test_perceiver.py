@@ -85,3 +85,7 @@ def test_backward(config: UniverseDataConfig):
 
     assert params is params
     assert new_params is not params
+
+
+def test_optimize(config: UniverseDataConfig):
+    optimize(config)

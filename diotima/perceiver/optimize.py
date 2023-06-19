@@ -72,8 +72,8 @@ def synth_data(config: UniverseDataConfig, n_univs: int):
 
 
 def raw_forward(data: Data, config: UniverseDataConfig, is_training: bool):
-    n_dims = int(data.universe_config.n_dims[0][0])
-    n_atoms = int(data.universe_config.n_atoms[0][0])
+    n_dims = data.locs_history.shape[-1]
+    n_atoms = data.atom_elems.shape[-2]
     future_steps = config.steps - config.start
     atom_locs = rearrange(data.locs_history, "univs (t a) l -> t univs a l", a=n_atoms)[-1]
 
@@ -93,10 +93,16 @@ def raw_forward(data: Data, config: UniverseDataConfig, is_training: bool):
     )
     encoder = PerceiverEncoder(
         z_index_dim=5,
-        num_z_channels=8
+        num_z_channels=8,
+        num_blocks=1,
+        num_self_attends_per_block=1,
+        num_self_attend_heads=1,
     )
+
+    # TODO: Make things smol.
     decoder = BasicDecoder(
         output_num_channels=n_dims,
+        num_z_channels=8,
         position_encoding_type="fourier",
         fourier_position_encoding_kwargs=dict(
             num_bands=1,
@@ -146,8 +152,7 @@ def raw_forward(data: Data, config: UniverseDataConfig, is_training: bool):
 
 
 def init_opt(config: UniverseDataConfig):
-    n_univs = 2
-    data = synth_data(config, n_univs=n_univs)
+    data = synth_data(config, n_univs=2)
 
     forward = hk.transform_with_state(raw_forward)
     params, state = forward.init(next(config.rng), data, config, True)
@@ -183,3 +188,24 @@ def backward(
     params = optax.apply_updates(params, updates)
 
     return params, state, opt_state
+
+
+def optimize(
+        config: UniverseDataConfig
+):
+    # TODO: Move to broader config.
+    epochs = 2
+    n_univs = 2
+
+    data = synth_data(config, n_univs=n_univs)
+    params, state, forward = init_opt(config)
+    optim = optax.adam(1e-4)
+    opt_state = optim.init(params)
+
+    def scanned_backward(state, _):
+        params, state, opt_state = state
+        new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, next(config.rng), optim, data, config)
+        state = new_params, new_state, new_opt_state
+        return state, state
+
+    return jax.lax.scan(scanned_backward, (params, state, opt_state), None, epochs)
