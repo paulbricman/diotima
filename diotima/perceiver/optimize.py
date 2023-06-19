@@ -73,112 +73,106 @@ def synth_data(config: UniverseDataConfig, n_univs: int, key: PRNGKeyArray):
     return data
 
 
-class Experiment:
-    def __init__(self):
-        self.forward = hk.transform_with_state(self._forward_fn)
-        self._params = None
-        self._state = None
+def raw_forward(data: Data, config: UniverseDataConfig, is_training: bool):
+    n_dims = int(data.universe_config.n_dims[0][0])
+    n_atoms = int(data.universe_config.n_atoms[0][0])
+    future_steps = config.steps - config.start
+    atom_locs = rearrange(data.locs_history, "univs (t a) l -> t univs a l", a=n_atoms)[-1]
 
-    def _forward_fn(self, data: Data, config: UniverseDataConfig, is_training: bool):
-        n_dims = int(data.universe_config.n_dims[0][0])
-        n_atoms = int(data.universe_config.n_atoms[0][0])
-        future_steps = config.steps - config.start
-        atom_locs = rearrange(data.locs_history, "univs (t a) l -> t univs a l", a=n_atoms)[-1]
+    input = repeat(data.atom_elems, "univs a e -> univs (t a) e", t=config.start)
+    space_pos = data.locs_history
+    time_pos = repeat(data.idx_history, "univs t -> univs (t a) 1", a=n_atoms)
+    pos = jnp.concatenate((space_pos, time_pos), axis=2)
 
-        input = repeat(data.atom_elems, "univs a e -> univs (t a) e", t=config.start)
-        space_pos = data.locs_history
-        time_pos = repeat(data.idx_history, "univs t -> univs (t a) 1", a=n_atoms)
-        pos = jnp.concatenate((space_pos, time_pos), axis=2)
-
-        # TODO: Move config to separate get_config
-        preprocessor = DynamicPointCloudPreprocessor(
-            fourier_position_encoding_kwargs=dict(
-                num_bands=1,
-                max_resolution=[1],
-                sine_only=True,
-                concat_pos=False,
-            )
+    # TODO: Move config to separate get_config
+    preprocessor = DynamicPointCloudPreprocessor(
+        fourier_position_encoding_kwargs=dict(
+            num_bands=1,
+            max_resolution=[1],
+            sine_only=True,
+            concat_pos=False,
         )
-        encoder = PerceiverEncoder(
-            z_index_dim=5,
-            num_z_channels=8
+    )
+    encoder = PerceiverEncoder(
+        z_index_dim=5,
+        num_z_channels=8
+    )
+    decoder = BasicDecoder(
+        output_num_channels=n_dims,
+        position_encoding_type="fourier",
+        fourier_position_encoding_kwargs=dict(
+            num_bands=1,
+            max_resolution=[1],
+            sine_only=True,
+            concat_pos=False,
         )
-        decoder = BasicDecoder(
-            output_num_channels=n_dims,
-            position_encoding_type="fourier",
-            fourier_position_encoding_kwargs=dict(
-                num_bands=1,
-                max_resolution=[1],
-                sine_only=True,
-                concat_pos=False,
-            )
-        )
+    )
 
-        input, _, input_without_pos = preprocessor(input, pos)
-        encoder_query = encoder.latents(input)
+    input, _, input_without_pos = preprocessor(input, pos)
+    encoder_query = encoder.latents(input)
 
-        decoder_query, _, decoder_query_without_pos = preprocessor(
-            data.atom_elems,
-            atom_locs
-        )
+    decoder_query, _, decoder_query_without_pos = preprocessor(
+        data.atom_elems,
+        atom_locs
+    )
 
-        latents = encoder(input, encoder_query, is_training=is_training)
+    latents = encoder(input, encoder_query, is_training=is_training)
 
-        def decode_slot(latent):
-            latent = rearrange(latent, "b z_dim -> b 1 z_dim")
-            return decoder(decoder_query, latent, is_training=is_training)
+    def decode_slot(latent):
+        latent = rearrange(latent, "b z_dim -> b 1 z_dim")
+        return decoder(decoder_query, latent, is_training=is_training)
 
-        # TODO: Implement some kind of sampling everything else equal.
-        one_step_preds = jax.vmap(decode_slot, in_axes=1)(latents)
-        agg_one_step_preds = reduce(one_step_preds, "z b a l -> b a l", "sum")
+    # TODO: Implement some kind of sampling everything else equal.
+    one_step_preds = jax.vmap(decode_slot, in_axes=1)(latents)
+    agg_one_step_preds = reduce(one_step_preds, "z b a l -> b a l", "sum")
 
-        def preds_to_forecast():
-            def inject_one_step(state, _):
-                state = state + agg_one_step_preds
-                return state, state
+    def preds_to_forecast():
+        def inject_one_step(state, _):
+            state = state + agg_one_step_preds
+            return state, state
 
-            forecast = jax.lax.scan(inject_one_step, atom_locs, None, future_steps)
-            forecast = rearrange(forecast[1], "t b a l -> b (t a) l")
-            return forecast
+        forecast = jax.lax.scan(inject_one_step, atom_locs, None, future_steps)
+        forecast = rearrange(forecast[1], "t b a l -> b (t a) l")
+        return forecast
 
-        forecast = preds_to_forecast()
+    forecast = preds_to_forecast()
 
-        return Data(
-            data.atom_elems,
-            data.locs_history,
-            data.idx_history,
-            data.locs_future,
-            data.universe_config,
-            forecast
-        )
+    return Data(
+        data.atom_elems,
+        data.locs_history,
+        data.idx_history,
+        data.locs_future,
+        data.universe_config,
+        forecast
+    )
 
 
-    def loss(
-            self,
-            params: hk.Params,
-            state: hk.State,
-            opt_state: OptState,
-            rng: Array,
-            data: Data,
-            config: UniverseDataConfig
-    ):
-        data, state = self.forward.apply(params, state, rng, data, config, is_training=True)
-        return jnp.square(data.locs_future - data.pred_locs_future).mean()
+def loss(
+        params: hk.Params,
+        state: hk.State,
+        opt_state: OptState,
+        forward,
+        rng: Array,
+        data: Data,
+        config: UniverseDataConfig
+):
+    data, state = forward.apply(params, state, rng, data, config, is_training=True)
+    return jnp.square(data.locs_future - data.pred_locs_future).mean()
 
 
-    def backward(
-            self,
-            params: hk.Params,
-            state: hk.State,
-            opt_state: OptState,
-            rng: Array,
-            optimizer,
-            data: Data,
-            config: UniverseDataConfig
-    ):
-        grads = jax.grad(self.loss)(params, state, opt_state, rng, data, config)
+def backward(
+        params: hk.Params,
+        state: hk.State,
+        opt_state: OptState,
+        forward,
+        rng: Array,
+        optimizer,
+        data: Data,
+        config: UniverseDataConfig
+):
+    grads = jax.grad(loss)(params, state, opt_state, forward, rng, data, config)
 
-        updates, opt_state = optimizer.update(grads, opt_state, params)
-        params = optax.apply_updates(params, updates)
+    updates, opt_state = optimizer.update(grads, opt_state, params)
+    params = optax.apply_updates(params, updates)
 
-        return params, state, opt_state
+    return params, state, opt_state

@@ -46,9 +46,9 @@ def test_forward(config: UniverseDataConfig):
     data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
     rng = jax.random.PRNGKey(42)
 
-    exp = Experiment()
-    params, state = exp.forward.init(rng, data, config, True)
-    out, state = exp.forward.apply(params, state, rng, data, config, True)
+    forward = hk.transform_with_state(raw_forward)
+    params, state = forward.init(rng, data, config, True)
+    out, state = forward.apply(params, state, rng, data, config, True)
 
     assert out.pred_locs_future.shape == (
         n_univs * config.n_cfs,
@@ -62,12 +62,12 @@ def test_loss(config: UniverseDataConfig):
     data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
     rng = jax.random.PRNGKey(42)
 
-    exp = Experiment()
-    params, state = exp.forward.init(rng, data, config, True)
+    forward = hk.transform_with_state(raw_forward)
+    params, state = forward.init(rng, data, config, True)
 
     optimizer = optax.adam(1e-4)
     opt_state = optimizer.init(params)
-    error = exp.loss(params, state, opt_state, rng, data, config)
+    error = loss(params, state, opt_state, forward, rng, data, config)
 
     assert error.size == 1
 
@@ -77,12 +77,12 @@ def test_backward(config: UniverseDataConfig):
     data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
     rng = jax.random.PRNGKey(42)
 
-    exp = Experiment()
-    params, state = exp.forward.init(rng, data, config, True)
+    forward = hk.transform_with_state(raw_forward)
+    params, state = forward.init(rng, data, config, True)
 
     optim = optax.adam(1e-4)
     opt_state = optim.init(params)
-    new_params, new_state, new_opt_state = exp.backward(params, state, opt_state, rng, optim, data, config)
+    new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, rng, optim, data, config)
 
     assert params is params
     assert new_params is not params
