@@ -24,116 +24,69 @@ def config():
         steps=4,
         n_cfs=2,
         start=2,
-        key=jax.random.PRNGKey(0)
+        rng=hk.PRNGSequence(jax.random.PRNGKey(0))
     )
 
 
-@pytest.fixture
-def experiment(config):
-    return Experiment(
-        None,
-        hk.PRNGSequence(jax.random.PRNGKey(42)),
-        config
-    )
+def test_hk_next_rng(config):
+    first = next(config.rng)
+    second = next(config.rng)
+
+    assert not jnp.allclose(first, second)
 
 
-def test_experiment(experiment):
-    pass
-
-
-def test_synth_universe_data(experiment):
-    universe_data = experiment.synth_universe_data()
+def test_synth_universe_data(config):
+    universe_data = synth_universe_data(config)
 
     assert universe_data.atom_elems[0].size == universe_data.atom_elems[1].size
 
 
-def test_data(experiment):
+def test_synth_data(config):
     n_univs = 2
-    data = experiment.synth_data(n_univs)
+    data = synth_data(config, n_univs)
 
-    assert data.atom_elems.shape[0] == n_univs * experiment._config.n_cfs
+    assert data.atom_elems.shape[0] == n_univs * config.n_cfs
 
 
-def test_forward(experiment):
+def test_forward(config):
     n_univs = 2
-<<<<<<< HEAD
-    data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
-    rng = jax.random.PRNGKey(42)
+    data = synth_data(config, n_univs=n_univs)
 
     forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(rng, data, config, True)
-    out, state = forward.apply(params, state, rng, data, config, True)
-=======
-    out, state = experiment.forward.apply(
-        experiment._params,
-        experiment._state,
-        next(experiment._rng),
-        experiment.synth_data(n_univs),
-        experiment._config,
-        True
-    )
->>>>>>> origin/main
+    params, state = forward.init(next(config.rng), data, config, True)
+    out, state = forward.apply(params, state, next(config.rng), data, config, True)
 
     assert out.pred_locs_future.shape == (
-        n_univs * experiment._config.n_cfs,
-        (experiment._config.steps - experiment._config.start) * int(out.universe_config.n_atoms[0][0]),
+        n_univs * config.n_cfs,
+        (config.steps - config.start) * int(out.universe_config.n_atoms[0][0]),
         int(out.universe_config.n_dims[0][0])
     )
 
 
-<<<<<<< HEAD
 def test_loss(config: UniverseDataConfig):
     n_univs = 2
-    data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
-    rng = jax.random.PRNGKey(42)
+    data = synth_data(config, n_univs=n_univs)
 
     forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(rng, data, config, True)
+    params, state = forward.init(next(config.rng), data, config, True)
 
     optimizer = optax.adam(1e-4)
     opt_state = optimizer.init(params)
-    error = loss(params, state, opt_state, forward, rng, data, config)
-=======
-def test_loss(experiment):
-    optimizer = optax.adam(1e-4)
-    opt_state = optimizer.init(experiment._params)
-    error = experiment.loss(
-        experiment._params,
-        experiment._state,
-        opt_state,
-        experiment.synth_data(2),
-        experiment._config
-    )
->>>>>>> origin/main
+    error = loss(params, state, opt_state, forward, next(config.rng), data, config)
 
     assert error.size == 1
 
 
-<<<<<<< HEAD
 def test_backward(config: UniverseDataConfig):
     n_univs = 2
-    data = synth_data(config, n_univs=n_univs, key=jax.random.PRNGKey(0))
-    rng = jax.random.PRNGKey(42)
+    data = synth_data(config, n_univs=n_univs)
 
     forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(rng, data, config, True)
+    params, state = forward.init(next(config.rng), data, config, True)
 
     optim = optax.adam(1e-4)
     opt_state = optim.init(params)
-    new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, rng, optim, data, config)
-=======
-def test_backward(experiment):
-    optim = optax.adam(1e-4)
-    opt_state = optim.init(experiment._params)
-    new_params, new_state, new_opt_state = experiment.backward(
-        experiment._params,
-        experiment._state,
-        opt_state,
-        optim,
-        experiment.synth_data(2),
-        experiment._config
-    )
->>>>>>> origin/main
+    new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, next(config.rng), optim, data, config)
 
-    assert experiment._params is experiment._params
-    assert new_params is not experiment._params
+    assert params is params
+    assert new_params is not params
