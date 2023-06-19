@@ -51,9 +51,8 @@ def test_synth_data(config):
 def test_forward(config):
     n_univs = 2
     data = synth_data(config, n_univs=n_univs)
+    params, state, forward = init_opt(config)
 
-    forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(next(config.rng), data, config, True)
     out, state = forward.apply(params, state, next(config.rng), data, config, True)
 
     assert out.pred_locs_future.shape == (
@@ -66,9 +65,7 @@ def test_forward(config):
 def test_loss(config: UniverseDataConfig):
     n_univs = 2
     data = synth_data(config, n_univs=n_univs)
-
-    forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(next(config.rng), data, config, True)
+    params, state, forward = init_opt(config)
 
     optimizer = optax.adam(1e-4)
     opt_state = optimizer.init(params)
@@ -81,9 +78,7 @@ def test_backward(config: UniverseDataConfig):
     n_univs = 2
     data = synth_data(config, n_univs=n_univs)
 
-    forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(next(config.rng), data, config, True)
-
+    params, state, forward = init_opt(config)
     optim = optax.adam(1e-4)
     opt_state = optim.init(params)
     new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, next(config.rng), optim, data, config)

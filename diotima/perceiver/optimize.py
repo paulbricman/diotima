@@ -145,6 +145,15 @@ def raw_forward(data: Data, config: UniverseDataConfig, is_training: bool):
     )
 
 
+def init_opt(config: UniverseDataConfig):
+    n_univs = 2
+    data = synth_data(config, n_univs=n_univs)
+
+    forward = hk.transform_with_state(raw_forward)
+    params, state = forward.init(next(config.rng), data, config, True)
+    return params, state, forward
+
+
 def loss(
         params: hk.Params,
         state: hk.State,
@@ -174,4 +183,3 @@ def backward(
     params = optax.apply_updates(params, updates)
 
     return params, state, opt_state
-
