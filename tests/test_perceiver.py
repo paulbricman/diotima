@@ -89,3 +89,9 @@ def test_backward(config: UniverseDataConfig):
 
 def test_optimize(config: UniverseDataConfig):
     optimize(config)
+
+
+def test_get_config(universe_config):
+    cfg = get_perceiver_config(universe_config)
+
+    assert len(cfg.keys()) > 0

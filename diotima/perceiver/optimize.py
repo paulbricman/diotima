@@ -208,3 +208,50 @@ def optimize(
         return state, state
 
     return jax.lax.scan(scanned_backward, (params, state, opt_state), None, epochs)
+
+
+def get_perceiver_config(universe_config: UniverseConfig):
+    config = {
+        "optimization": {
+            "epochs": 2
+        },
+        "optimizer": {
+            "lr": 1e-4
+        },
+        "data": {
+            "n_univs": 2,
+            "steps": 4,
+            "n_cfs": 2,
+            "start": 2
+        },
+        "preprocessor": {
+            "fourier_position_encoding_kwargs": {
+                "num_bands": 1,
+                "max_resolution": [1],
+                "sine_only": True,
+                "concat_pos": False
+            }
+        },
+        "encoder": {
+            "z_index_dim": 5,
+            "num_z_channels": 8,
+            "num_blocks": 1,
+            "num_self_attends_per_block": 1,
+            "num_self_attend_heads": 1
+        },
+        "decoder": {
+            "output_num_channels": universe_config.n_dims,
+            "num_z_channels": 8,
+            "position_encoding_type": "fourier",
+            "fourier_position_encoding_kwargs": {
+                "num_bands": 1,
+                "max_resolution": [1],
+                "sine_only": True,
+                "concat_pos": False
+            }
+        }
+    }
+
+    cfg = config_dict.FrozenConfigDict(config)
+    return cfg
+
