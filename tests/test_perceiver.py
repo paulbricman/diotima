@@ -69,7 +69,7 @@ def test_loss(config: UniverseDataConfig):
 
     optimizer = optax.adam(1e-4)
     opt_state = optimizer.init(params)
-    error = loss(params, state, opt_state, forward, next(config.rng), data, config)
+    error = loss(params, state, opt_state, forward, data, config)
 
     assert error.size == 1
 
@@ -81,7 +81,7 @@ def test_backward(config: UniverseDataConfig):
     params, state, forward = init_opt(config)
     optim = optax.adam(1e-4)
     opt_state = optim.init(params)
-    new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, next(config.rng), optim, data, config)
+    new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, config)
 
     assert params is params
     assert new_params is not params

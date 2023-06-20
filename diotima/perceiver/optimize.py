@@ -12,6 +12,7 @@ from jaxline import experiment
 
 from einops import repeat, rearrange, reduce
 from typing import Tuple, NamedTuple
+from ml_collections import config_dict
 
 
 OptState = Tuple[optax.TraceState, optax.ScaleByScheduleState, optax.ScaleState]
@@ -33,31 +34,31 @@ class UniverseDataConfig(NamedTuple):
     rng: hk.PRNGSequence
 
 
-def synth_universe_data(config: UniverseDataConfig):
+def synth_universe_data(universe_data_config: UniverseDataConfig):
     # TODO: Extend from dummy.
     universe_config = default_universe_config()
-    universe = seed(universe_config, next(config.rng))
-    universe = run(universe, config.steps)
+    universe = seed(universe_config, next(universe_data_config.rng))
+    universe = run(universe, universe_data_config.steps)
 
     cfs = spawn_counterfactuals(
         universe,
-        config.start,
-        config.n_cfs,
-        next(config.rng)
+        universe_data_config.start,
+        universe_data_config.n_cfs,
+        next(universe_data_config.rng)
     )
     cfs_to_data = lambda cf: Data(
         cf.atom_elems,
-        cf.locs_history[:config.start],
-        jnp.arange(config.start),
-        cf.locs_history[config.start:],
+        cf.locs_history[:universe_data_config.start],
+        jnp.arange(universe_data_config.start),
+        cf.locs_history[universe_data_config.start:],
         cf.universe_config,
         None
     )
     return jax.vmap(cfs_to_data)(cfs)
 
 
-def synth_data(config: UniverseDataConfig, n_univs: int):
-    pure_synth_universe_data = lambda _: synth_universe_data(config)
+def synth_data(universe_data_config: UniverseDataConfig, n_univs: int):
+    pure_synth_universe_data = lambda _: synth_universe_data(universe_data_config)
     data = jax.vmap(pure_synth_universe_data)(jnp.arange(n_univs))
 
     data = Data(
@@ -71,13 +72,13 @@ def synth_data(config: UniverseDataConfig, n_univs: int):
     return data
 
 
-def raw_forward(data: Data, config: UniverseDataConfig, is_training: bool):
+def raw_forward(data: Data, universe_data_config: UniverseDataConfig, is_training: bool):
     n_dims = data.locs_history.shape[-1]
     n_atoms = data.atom_elems.shape[-2]
-    future_steps = config.steps - config.start
+    future_steps = universe_data_config.steps - universe_data_config.start
     atom_locs = rearrange(data.locs_history, "univs (t a) l -> t univs a l", a=n_atoms)[-1]
 
-    input = repeat(data.atom_elems, "univs a e -> univs (t a) e", t=config.start)
+    input = repeat(data.atom_elems, "univs a e -> univs (t a) e", t=universe_data_config.start)
     space_pos = data.locs_history
     time_pos = repeat(data.idx_history, "univs t -> univs (t a) 1", a=n_atoms)
     pos = jnp.concatenate((space_pos, time_pos), axis=2)
@@ -151,11 +152,11 @@ def raw_forward(data: Data, config: UniverseDataConfig, is_training: bool):
     )
 
 
-def init_opt(config: UniverseDataConfig):
-    data = synth_data(config, n_univs=2)
+def init_opt(universe_data_config: UniverseDataConfig):
+    data = synth_data(universe_data_config, n_univs=2)
 
     forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(next(config.rng), data, config, True)
+    params, state = forward.init(next(universe_data_config.rng), data, universe_data_config, True)
     return params, state, forward
 
 
@@ -164,11 +165,10 @@ def loss(
         state: hk.State,
         opt_state: OptState,
         forward,
-        rng: Array,
         data: Data,
-        config: UniverseDataConfig
+        universe_data_config: UniverseDataConfig
 ):
-    data, state = forward.apply(params, state, rng, data, config, is_training=True)
+    data, state = forward.apply(params, state, next(universe_data_config.rng), data, universe_data_config, is_training=True)
     return jnp.square(data.locs_future - data.pred_locs_future).mean()
 
 
@@ -177,12 +177,11 @@ def backward(
         state: hk.State,
         opt_state: OptState,
         forward,
-        rng: Array,
         optimizer,
         data: Data,
-        config: UniverseDataConfig
+        universe_data_config: UniverseDataConfig
 ):
-    grads = jax.grad(loss)(params, state, opt_state, forward, rng, data, config)
+    grads = jax.grad(loss)(params, state, opt_state, forward, data, universe_data_config)
 
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
@@ -191,20 +190,20 @@ def backward(
 
 
 def optimize(
-        config: UniverseDataConfig
+        universe_data_config: UniverseDataConfig
 ):
     # TODO: Move to broader config.
     epochs = 2
     n_univs = 2
 
-    data = synth_data(config, n_univs=n_univs)
-    params, state, forward = init_opt(config)
+    data = synth_data(universe_data_config, n_univs=n_univs)
+    params, state, forward = init_opt(universe_data_config)
     optim = optax.adam(1e-4)
     opt_state = optim.init(params)
 
     def scanned_backward(state, _):
         params, state, opt_state = state
-        new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, next(config.rng), optim, data, config)
+        new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, universe_data_config)
         state = new_params, new_state, new_opt_state
         return state, state
 
