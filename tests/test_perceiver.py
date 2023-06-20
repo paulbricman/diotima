@@ -14,12 +14,17 @@ def universe_config():
 
 
 @pytest.fixture
+def perceiver_config(universe_config):
+    return default_perceiver_config(universe_config)
+
+
+@pytest.fixture
 def universe(universe_config: UniverseConfig):
     return seed(universe_config)
 
 
 @pytest.fixture
-def config():
+def universe_data_config():
     return UniverseDataConfig(
         steps=4,
         n_cfs=2,
@@ -28,70 +33,60 @@ def config():
     )
 
 
-def test_hk_next_rng(config):
-    first = next(config.rng)
-    second = next(config.rng)
+def test_hk_next_rng(universe_data_config):
+    first = next(universe_data_config.rng)
+    second = next(universe_data_config.rng)
 
     assert not jnp.allclose(first, second)
 
 
-def test_synth_universe_data(config):
-    universe_data = synth_universe_data(config)
+def test_synth_universe_data(universe_data_config):
+    universe_data = synth_universe_data(universe_data_config)
 
     assert universe_data.atom_elems[0].size == universe_data.atom_elems[1].size
 
 
-def test_synth_data(config):
-    n_univs = 2
-    data = synth_data(config, n_univs)
+def test_synth_data(universe_data_config, perceiver_config):
+    data = synth_data(universe_data_config, perceiver_config)
 
-    assert data.atom_elems.shape[0] == n_univs * config.n_cfs
+    assert data.atom_elems.shape[0] == perceiver_config.data.n_univs * universe_data_config.n_cfs
 
 
-def test_forward(config):
-    n_univs = 2
-    data = synth_data(config, n_univs=n_univs)
-    params, state, forward = init_opt(config)
+def test_forward(universe_data_config, perceiver_config):
+    data = synth_data(universe_data_config, perceiver_config)
+    params, state, forward = init_opt(universe_data_config, perceiver_config)
 
-    out, state = forward.apply(params, state, next(config.rng), data, config, True)
+    out, state = forward.apply(params, state, next(universe_data_config.rng), data, universe_data_config, perceiver_config, True)
 
     assert out.pred_locs_future.shape == (
-        n_univs * config.n_cfs,
-        (config.steps - config.start) * int(out.universe_config.n_atoms[0][0]),
+        perceiver_config.data.n_univs * universe_data_config.n_cfs,
+        (universe_data_config.steps - universe_data_config.start) * int(out.universe_config.n_atoms[0][0]),
         int(out.universe_config.n_dims[0][0])
     )
 
 
-def test_loss(config: UniverseDataConfig):
-    n_univs = 2
-    data = synth_data(config, n_univs=n_univs)
-    params, state, forward = init_opt(config)
+def test_loss(universe_data_config, perceiver_config):
+    data = synth_data(universe_data_config, perceiver_config)
+    params, state, forward = init_opt(universe_data_config, perceiver_config)
 
-    optimizer = optax.adam(1e-4)
+    optimizer = optax.adam(perceiver_config.optimizer.lr)
     opt_state = optimizer.init(params)
-    error = loss(params, state, opt_state, forward, data, config)
+    error = loss(params, state, opt_state, forward, data, universe_data_config, perceiver_config)
 
     assert error.size == 1
 
 
-def test_backward(config: UniverseDataConfig):
-    n_univs = 2
-    data = synth_data(config, n_univs=n_univs)
+def test_backward(universe_data_config, perceiver_config):
+    data = synth_data(universe_data_config, perceiver_config)
 
-    params, state, forward = init_opt(config)
-    optim = optax.adam(1e-4)
+    params, state, forward = init_opt(universe_data_config, perceiver_config)
+    optim = optax.adam(perceiver_config.optimizer.lr)
     opt_state = optim.init(params)
-    new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, config)
+    new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, universe_data_config, perceiver_config)
 
     assert params is params
     assert new_params is not params
 
 
-def test_optimize(config: UniverseDataConfig):
-    optimize(config)
-
-
-def test_get_config(universe_config):
-    cfg = get_perceiver_config(universe_config)
-
-    assert len(cfg.keys()) > 0
+def test_optimize(universe_data_config, perceiver_config):
+    optimize(universe_data_config, perceiver_config)

@@ -12,7 +12,7 @@ from jaxline import experiment
 
 from einops import repeat, rearrange, reduce
 from typing import Tuple, NamedTuple
-from ml_collections import config_dict
+from ml_collections.config_dict import FrozenConfigDict
 
 
 OptState = Tuple[optax.TraceState, optax.ScaleByScheduleState, optax.ScaleState]
@@ -57,9 +57,9 @@ def synth_universe_data(universe_data_config: UniverseDataConfig):
     return jax.vmap(cfs_to_data)(cfs)
 
 
-def synth_data(universe_data_config: UniverseDataConfig, n_univs: int):
+def synth_data(universe_data_config: UniverseDataConfig, perceiver_config: FrozenConfigDict):
     pure_synth_universe_data = lambda _: synth_universe_data(universe_data_config)
-    data = jax.vmap(pure_synth_universe_data)(jnp.arange(n_univs))
+    data = jax.vmap(pure_synth_universe_data)(jnp.arange(perceiver_config.data.n_univs))
 
     data = Data(
         atom_elems=rearrange(data.atom_elems, "univs cfs a e -> (univs cfs) a e"),
@@ -72,7 +72,7 @@ def synth_data(universe_data_config: UniverseDataConfig, n_univs: int):
     return data
 
 
-def raw_forward(data: Data, universe_data_config: UniverseDataConfig, is_training: bool):
+def raw_forward(data: Data, universe_data_config: UniverseDataConfig, perceiver_config: FrozenConfigDict, is_training: bool):
     n_dims = data.locs_history.shape[-1]
     n_atoms = data.atom_elems.shape[-2]
     future_steps = universe_data_config.steps - universe_data_config.start
@@ -83,43 +83,14 @@ def raw_forward(data: Data, universe_data_config: UniverseDataConfig, is_trainin
     time_pos = repeat(data.idx_history, "univs t -> univs (t a) 1", a=n_atoms)
     pos = jnp.concatenate((space_pos, time_pos), axis=2)
 
-    # TODO: Move config to separate get_config
-    preprocessor = DynamicPointCloudPreprocessor(
-        fourier_position_encoding_kwargs=dict(
-            num_bands=1,
-            max_resolution=[1],
-            sine_only=True,
-            concat_pos=False,
-        )
-    )
-    encoder = PerceiverEncoder(
-        z_index_dim=5,
-        num_z_channels=8,
-        num_blocks=1,
-        num_self_attends_per_block=1,
-        num_self_attend_heads=1,
-    )
-
-    # TODO: Make things smol.
-    decoder = BasicDecoder(
-        output_num_channels=n_dims,
-        num_z_channels=8,
-        position_encoding_type="fourier",
-        fourier_position_encoding_kwargs=dict(
-            num_bands=1,
-            max_resolution=[1],
-            sine_only=True,
-            concat_pos=False,
-        )
-    )
+    preprocessor = DynamicPointCloudPreprocessor(**perceiver_config.preprocessor)
+    encoder = PerceiverEncoder(**perceiver_config.encoder)
+    decoder = BasicDecoder(**perceiver_config.decoder)
 
     input, _, input_without_pos = preprocessor(input, pos)
     encoder_query = encoder.latents(input)
 
-    decoder_query, _, decoder_query_without_pos = preprocessor(
-        data.atom_elems,
-        atom_locs
-    )
+    decoder_query, _, decoder_query_without_pos = preprocessor(data.atom_elems, atom_locs)
 
     latents = encoder(input, encoder_query, is_training=is_training)
 
@@ -152,11 +123,11 @@ def raw_forward(data: Data, universe_data_config: UniverseDataConfig, is_trainin
     )
 
 
-def init_opt(universe_data_config: UniverseDataConfig):
-    data = synth_data(universe_data_config, n_univs=2)
+def init_opt(universe_data_config: UniverseDataConfig, perceiver_config: FrozenConfigDict):
+    data = synth_data(universe_data_config, perceiver_config)
 
     forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(next(universe_data_config.rng), data, universe_data_config, True)
+    params, state = forward.init(next(universe_data_config.rng), data, universe_data_config, perceiver_config, True)
     return params, state, forward
 
 
@@ -166,9 +137,10 @@ def loss(
         opt_state: OptState,
         forward,
         data: Data,
-        universe_data_config: UniverseDataConfig
+        universe_data_config: UniverseDataConfig,
+        perceiver_config: FrozenConfigDict
 ):
-    data, state = forward.apply(params, state, next(universe_data_config.rng), data, universe_data_config, is_training=True)
+    data, state = forward.apply(params, state, next(universe_data_config.rng), data, universe_data_config, perceiver_config, is_training=True)
     return jnp.square(data.locs_future - data.pred_locs_future).mean()
 
 
@@ -179,9 +151,10 @@ def backward(
         forward,
         optimizer,
         data: Data,
-        universe_data_config: UniverseDataConfig
+        universe_data_config: UniverseDataConfig,
+        perceiver_config: FrozenConfigDict
 ):
-    grads = jax.grad(loss)(params, state, opt_state, forward, data, universe_data_config)
+    grads = jax.grad(loss)(params, state, opt_state, forward, data, universe_data_config, perceiver_config)
 
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
@@ -190,27 +163,24 @@ def backward(
 
 
 def optimize(
-        universe_data_config: UniverseDataConfig
+        universe_data_config: UniverseDataConfig,
+        perceiver_config: FrozenConfigDict
 ):
-    # TODO: Move to broader config.
-    epochs = 2
-    n_univs = 2
-
-    data = synth_data(universe_data_config, n_univs=n_univs)
-    params, state, forward = init_opt(universe_data_config)
-    optim = optax.adam(1e-4)
+    data = synth_data(universe_data_config, perceiver_config)
+    params, state, forward = init_opt(universe_data_config, perceiver_config)
+    optim = optax.adam(perceiver_config.optimizer.lr)
     opt_state = optim.init(params)
 
     def scanned_backward(state, _):
         params, state, opt_state = state
-        new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, universe_data_config)
+        new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, universe_data_config, perceiver_config)
         state = new_params, new_state, new_opt_state
         return state, state
 
-    return jax.lax.scan(scanned_backward, (params, state, opt_state), None, epochs)
+    return jax.lax.scan(scanned_backward, (params, state, opt_state), None, perceiver_config.optimization.epochs)
 
 
-def get_perceiver_config(universe_config: UniverseConfig):
+def default_perceiver_config(universe_config: UniverseConfig):
     config = {
         "optimization": {
             "epochs": 2
@@ -252,6 +222,5 @@ def get_perceiver_config(universe_config: UniverseConfig):
         }
     }
 
-    cfg = config_dict.FrozenConfigDict(config)
+    cfg = FrozenConfigDict(config)
     return cfg
-
