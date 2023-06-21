@@ -19,11 +19,11 @@ OptState = Tuple[optax.TraceState, optax.ScaleByScheduleState, optax.ScaleState]
 
 
 class Data(NamedTuple):
-    atom_elems: Array
-    locs_history: Array
-    idx_history: Array
-    locs_future: Array
     universe_config: UniverseConfig
+    atom_elems: Array
+    idx_history: Array
+    locs_history: Array
+    locs_future: Array
     pred_locs_future: Array
 
 
@@ -39,41 +39,38 @@ def synth_universe_data(config: FrozenConfigDict):
         config.data.n_cfs,
         next(config.rng)
     )
-    cfs_to_data = lambda cf: Data(
-        cf.atom_elems,
-        cf.locs_history[:config.data.start],
-        jnp.arange(config.data.start),
-        cf.locs_history[config.data.start:],
-        cf.universe_config,
-        None
+
+    cf_to_datum = lambda cf: Data(
+        universe_config=None,
+        atom_elems=None,
+        idx_history=None,
+        locs_history=None,
+        locs_future=cf.locs_history[config.data.start:],
+        pred_locs_future=None,
     )
-    return jax.vmap(cfs_to_data)(cfs)
+
+    data = jax.vmap(cf_to_datum)(cfs)
+    data = data._replace(universe_config=universe.universe_config)
+    data = data._replace(atom_elems=universe.atom_elems)
+    data = data._replace(idx_history=jnp.arange(config.data.start))
+    data = data._replace(locs_history=universe.locs_history[:config.data.start])
+
+    return data
 
 
 def synth_data(config: FrozenConfigDict):
     pure_synth_universe_data = lambda _: synth_universe_data(config)
-    data = jax.vmap(pure_synth_universe_data)(jnp.arange(config.data.n_univs))
-
-    data = Data(
-        atom_elems=rearrange(data.atom_elems, "univs cfs a e -> (univs cfs) a e"),
-        locs_history=rearrange(data.locs_history, "univs cfs t a l -> (univs cfs) (t a) l"),
-        idx_history=rearrange(data.idx_history, "univs cfs t -> (univs cfs) t"),
-        locs_future=rearrange(data.locs_future, "univs cfs t a l -> (univs cfs) t a l"),
-        universe_config=data.universe_config,
-        pred_locs_future=None
-    )
-    return data
+    return jax.vmap(pure_synth_universe_data)(jnp.arange(config.data.n_univs))
 
 
 def raw_forward(data: Data, config: FrozenConfigDict, is_training: bool):
-    n_dims = data.locs_history.shape[-1]
-    n_atoms = data.atom_elems.shape[-2]
     future_steps = config.data.steps - config.data.start
-    atom_locs = rearrange(data.locs_history, "univs (t a) l -> t univs a l", a=n_atoms)[-1]
+    n_atoms = data.locs_history.shape[2]
+    atom_locs = rearrange(data.locs_history, "u t a l -> t u a l")[-1]
 
-    input = repeat(data.atom_elems, "univs a e -> univs (t a) e", t=config.data.start)
-    space_pos = data.locs_history
-    time_pos = repeat(data.idx_history, "univs t -> univs (t a) 1", a=n_atoms)
+    input = repeat(data.atom_elems, "u a e -> u (t a) e", t=config.data.start)
+    space_pos = repeat(data.locs_history, "u t a l -> u (t a) l")
+    time_pos = repeat(data.idx_history, "u t -> u (t a) 1", a=n_atoms)
     pos = jnp.concatenate((space_pos, time_pos), axis=2)
 
     preprocessor = DynamicPointCloudPreprocessor(**config.preprocessor)
@@ -83,9 +80,10 @@ def raw_forward(data: Data, config: FrozenConfigDict, is_training: bool):
     input, _, input_without_pos = preprocessor(input, pos)
     encoder_query = encoder.latents(input)
 
-    decoder_query_input = repeat(data.atom_elems, "univs a e -> univs (br a) e", br=config.optimization.branches)
-    decoder_query_space_pos = repeat(atom_locs, "univs a l -> univs (br a) l", br=config.optimization.branches)
-    decoder_query_branch_pos = repeat(jnp.arange(config.optimization.branches), "br -> univs (br a) 1", univs=config.data.n_univs * config.data.n_cfs, a=n_atoms)
+    decoder_query_input = repeat(data.atom_elems, "u a e -> u (b a) e", b=config.optimization.branches)
+    decoder_query_space_pos = repeat(atom_locs, "u a l -> u (b a) l", b=config.optimization.branches)
+    decoder_query_branch_pos = repeat(jnp.arange(config.optimization.branches), "b -> u (b a) 1", u=config.data.n_univs, a=n_atoms)
+
     decoder_query_pos = jnp.concatenate((decoder_query_space_pos, decoder_query_branch_pos), axis=2)
 
     decoder_query, _, decoder_query_without_pos = preprocessor(decoder_query_input, decoder_query_pos)
@@ -93,12 +91,12 @@ def raw_forward(data: Data, config: FrozenConfigDict, is_training: bool):
     latents = encoder(input, encoder_query, is_training=is_training)
 
     def decode_slot(latent):
-        latent = rearrange(latent, "b z -> b 1 z")
+        latent = rearrange(latent, "u z -> u 1 z")
         return decoder(decoder_query, latent, is_training=is_training)
 
     one_step_preds = jax.vmap(decode_slot, in_axes=1)(latents)
     # What aggregate into?
-    agg_one_step_preds = reduce(one_step_preds, "z b a l -> b a l", "sum")
+    agg_one_step_preds = reduce(one_step_preds, "z u a l -> u a l", "sum")
 
     def preds_to_forecast():
         def inject_one_step(state, _):
@@ -106,17 +104,17 @@ def raw_forward(data: Data, config: FrozenConfigDict, is_training: bool):
             return state, state
 
         forecast = jax.lax.scan(inject_one_step, decoder_query_space_pos, None, future_steps)
-        forecast = rearrange(forecast[1], "t b (br a) l -> b t a br l", br=config.optimization.branches)
+        forecast = rearrange(forecast[1], "t u (b a) l -> u t a b l", b=config.optimization.branches)
         return forecast
 
     forecast = preds_to_forecast()
 
     return Data(
-        data.atom_elems,
-        data.locs_history,
-        data.idx_history,
-        data.locs_future,
         data.universe_config,
+        data.atom_elems,
+        data.idx_history,
+        data.locs_history,
+        data.locs_future,
         forecast
     )
 
@@ -138,7 +136,9 @@ def loss(
         config: FrozenConfigDict
 ):
     data, state = forward.apply(params, state, next(config.rng), data, config, is_training=True)
-    return jnp.square(data.pred_locs_future - repeat(data.locs_future, "b t a l -> b t a br l", br=config.optimization.branches)).mean()
+    # TODO: Implement loss for affinity of cfs and bs
+    # return jnp.square(data.pred_locs_future - data.locs_future).mean()
+    return jnp.array(42.)
 
 
 def backward(
@@ -185,10 +185,10 @@ def default_config(universe_config):
             "lr": 1e-4
         },
         "data": {
-            "n_univs": 2,
-            "steps": 4,
-            "n_cfs": 2,
-            "start": 2
+            "n_univs": 3,
+            "steps": 6,
+            "n_cfs": 5,
+            "start": 4
         },
         "rng": hk.PRNGSequence(jax.random.PRNGKey(0)),
         "preprocessor": {
@@ -200,7 +200,7 @@ def default_config(universe_config):
             }
         },
         "encoder": {
-            "z_index_dim": 5,
+            "z_index_dim": 7,
             "num_z_channels": 8,
             "num_blocks": 1,
             "num_self_attends_per_block": 1,
