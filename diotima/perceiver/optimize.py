@@ -1,4 +1,5 @@
-from diotima.world.universe import default_universe_config, UniverseConfig, seed, run, trim, spawn_counterfactuals
+from diotima.world.universe import UniverseConfig, seed, run, spawn_counterfactuals
+import diotima.world.physics as physics
 from diotima.perceiver.io_processors import DynamicPointCloudPreprocessor
 from diotima.perceiver.perceiver import PerceiverEncoder, BasicDecoder
 
@@ -28,8 +29,7 @@ class Data(NamedTuple):
 
 
 def synth_universe_data(config: FrozenConfigDict):
-    # TODO: Extend from dummy.
-    universe_config = default_universe_config()
+    universe_config = UniverseConfig(**config.data.universe_config)
     universe = seed(universe_config, next(config.rng))
     universe = run(universe, config.data.steps)
 
@@ -216,7 +216,15 @@ def default_config(universe_config):
             "n_univs": 3,
             "steps": 6,
             "n_cfs": 5,
-            "start": 4
+            "start": 4,
+            "universe_config": {
+                "n_elems": 2,
+                "n_atoms": 2,
+                "n_dims": 2,
+                "dt": 0.1,
+                "physics_config": physics.default_physics_config(2),
+                "elem_distrib": physics.default_elem_distrib(2)
+            }
         },
         "rng": hk.PRNGSequence(jax.random.PRNGKey(0)),
         "preprocessor": {

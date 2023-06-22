@@ -1,4 +1,5 @@
 from diotima.perceiver.optimize import *
+from diotima.world.universe import *
 
 import jax
 import jax.numpy as jnp
