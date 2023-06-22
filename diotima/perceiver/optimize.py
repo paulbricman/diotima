@@ -13,7 +13,7 @@ from jaxline import experiment
 
 from einops import repeat, rearrange, reduce
 from typing import Tuple, NamedTuple
-from ml_collections.config_dict import FrozenConfigDict
+from ml_collections.config_dict import ConfigDict
 
 
 OptState = Tuple[optax.TraceState, optax.ScaleByScheduleState, optax.ScaleState]
@@ -28,7 +28,7 @@ class Data(NamedTuple):
     pred_locs_future: Array
 
 
-def synth_universe_data(config: FrozenConfigDict):
+def synth_universe_data(config: ConfigDict):
     universe_config = UniverseConfig(**config.data.universe_config)
     universe = seed(universe_config, next(config.rng))
     universe = run(universe, config.data.steps)
@@ -58,12 +58,12 @@ def synth_universe_data(config: FrozenConfigDict):
     return data
 
 
-def synth_data(config: FrozenConfigDict):
+def synth_data(config: ConfigDict):
     pure_synth_universe_data = lambda _: synth_universe_data(config)
     return jax.vmap(pure_synth_universe_data)(jnp.arange(config.data.n_univs))
 
 
-def raw_forward(data: Data, config: FrozenConfigDict, is_training: bool):
+def raw_forward(data: Data, config: ConfigDict, is_training: bool):
     future_steps = config.data.steps - config.data.start
     n_atoms = data.locs_history.shape[2]
     atom_locs = rearrange(data.locs_history, "u t a l -> t u a l")[-1]
@@ -95,7 +95,6 @@ def raw_forward(data: Data, config: FrozenConfigDict, is_training: bool):
         return decoder(decoder_query, latent, is_training=is_training)
 
     one_step_preds = jax.vmap(decode_slot, in_axes=1)(latents)
-    # What aggregate into?
     agg_one_step_preds = reduce(one_step_preds, "z u a l -> u a l", "sum")
 
     def preds_to_forecast():
@@ -119,7 +118,7 @@ def raw_forward(data: Data, config: FrozenConfigDict, is_training: bool):
     )
 
 
-def init_opt(config: FrozenConfigDict):
+def init_opt(config: ConfigDict):
     data = synth_data(config)
 
     forward = hk.transform_with_state(raw_forward)
@@ -133,7 +132,7 @@ def loss(
         opt_state: OptState,
         forward,
         data: Data,
-        config: FrozenConfigDict
+        config: ConfigDict
 ):
     data, state = forward.apply(params, state, next(config.rng), data, config, is_training=True)
     return distance(data.pred_locs_future, data.locs_future)
@@ -168,7 +167,6 @@ def distance(
     return jnp.mean(jax.vmap(lambda cfs, bs: compute_batch_distances(cfs, bs))(cfs, bs))
 
 
-
 def backward(
         params: hk.Params,
         state: hk.State,
@@ -176,7 +174,7 @@ def backward(
         forward,
         optimizer,
         data: Data,
-        config: FrozenConfigDict
+        config: ConfigDict
 ):
     grads = jax.grad(loss)(params, state, opt_state, forward, data, config)
 
@@ -187,7 +185,7 @@ def backward(
 
 
 def optimize(
-        config: FrozenConfigDict
+        config: ConfigDict
 ):
     data = synth_data(config)
     params, state, forward = init_opt(config)
@@ -243,7 +241,7 @@ def default_config(universe_config):
             "num_self_attend_heads": 1
         },
         "decoder": {
-            "output_num_channels": universe_config.n_dims,
+            "output_num_channels": 2, # Has to match n_dims
             "num_z_channels": 8,
             "position_encoding_type": "fourier",
             "fourier_position_encoding_kwargs": {
@@ -255,5 +253,4 @@ def default_config(universe_config):
         }
     }
 
-    cfg = FrozenConfigDict(config)
-    return cfg
+    return config

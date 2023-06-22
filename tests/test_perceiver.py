@@ -1,5 +1,6 @@
 from diotima.perceiver.optimize import *
 from diotima.world.universe import *
+from diotima.world.physics import *
 
 import jax
 import jax.numpy as jnp
@@ -7,6 +8,7 @@ import haiku as hk
 import optax
 
 import pytest
+from ml_collections import ConfigDict
 
 
 @pytest.fixture
