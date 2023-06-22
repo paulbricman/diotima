@@ -136,9 +136,37 @@ def loss(
         config: FrozenConfigDict
 ):
     data, state = forward.apply(params, state, next(config.rng), data, config, is_training=True)
-    # TODO: Implement loss for affinity of cfs and bs
-    # return jnp.square(data.pred_locs_future - data.locs_future).mean()
-    return jnp.array(42.)
+    return distance(data.pred_locs_future, data.locs_future)
+
+
+def distance(
+        cfs: Array,
+        bs: Array,
+):
+    # Differentiable cousin of Hausdorff distance
+    def compute_batch_distances(cfs, bs):
+        def compute_distances(cf, bs):
+            distances = jnp.linalg.norm(cf - bs, axis=1)
+            weights = 1 - jax.nn.softmax(distances)
+            softmin = jnp.dot(distances, weights)
+            return softmin
+
+        # Iterate over cfs to find shortest way to bs
+        dist_from_cfs = jax.vmap(lambda cf: compute_distances(cf, bs))(cfs)
+        print(dist_from_cfs)
+        dist_from_cfs = jnp.mean(dist_from_cfs)
+
+        # Iterate over bs to estimate shortest way to cfs
+        dist_from_bs = jax.vmap(lambda b: compute_distances(b, cfs))(bs)
+        print(dist_from_bs)
+        dist_from_bs = jnp.mean(dist_from_bs)
+
+        dist = dist_from_cfs + dist_from_bs
+        return dist
+
+    # Iterate over batches
+    return jnp.mean(jax.vmap(lambda cfs, bs: compute_batch_distances(cfs, bs))(cfs, bs))
+
 
 
 def backward(

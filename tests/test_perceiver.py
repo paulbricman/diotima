@@ -53,7 +53,6 @@ def test_raw_forward(config):
 
     out, state = forward.apply(params, state, next(config.rng), data, config, True)
 
-    print(out.universe_config)
     assert out.pred_locs_future.shape == (
         config.data.n_univs,
         (config.data.steps - config.data.start),
@@ -61,6 +60,20 @@ def test_raw_forward(config):
         config.optimization.branches,
         int(out.universe_config.n_dims[0])
     )
+
+
+def test_distance():
+    cfs0 = jnp.array([[[0], [0], [0]], [[10], [10], [10]]])
+    bs0 = jnp.array([[[0], [0]], [[10], [10]]])
+
+    assert jnp.isclose(distance(cfs0, bs0), 0)
+
+    bs1 = jnp.array([[[0], [1]], [[10], [20]]])
+    bs2 = jnp.array([[[1], [0]], [[20], [10]]])
+
+    assert distance(cfs0, bs0) < distance(cfs0, bs1)
+    assert distance(cfs0, bs1) == distance(cfs0, bs2)
+    assert distance(cfs0, bs1) == distance(bs1, cfs0)
 
 
 def test_loss(config):
