@@ -253,4 +253,4 @@ def default_config(universe_config):
         }
     }
 
-    return config
+    return ConfigDict(config)
