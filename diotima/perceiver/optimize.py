@@ -182,9 +182,12 @@ def backward(
         forward,
         optimizer,
         data: Data,
-        config: ConfigDict
+        config: ConfigDict,
+        is_parallel: bool = False
 ):
     grads = jax.grad(loss)(params, state, opt_state, forward, data, config)
+    if is_parallel:
+        grads = jax.lax.pmean(grads, axis_name="devices")
 
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
@@ -193,20 +196,28 @@ def backward(
 
 
 def optimize(
-        config: ConfigDict
+        config: ConfigDict,
+        params: hk.Params,
+        state: hk.State,
+        opt_state: OptState,
+        optim,
+        forward,
+        is_parallel: bool = False
 ):
-    data = synth_data(config)
-    params, state, forward = init_opt(config)
-    optim = optax.adam(config.optimizer.lr)
-    opt_state = optim.init(params)
-
     def scanned_backward(state, _):
+        data = synth_data(config)
         params, state, opt_state = state
-        new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, config)
+        new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, config, is_parallel)
+
         state = new_params, new_state, new_opt_state
         return state, state
 
-    return jax.lax.scan(scanned_backward, (params, state, opt_state), None, config.optimization.epochs)
+    scan_backward = lambda _: jax.lax.scan(scanned_backward, (params, state, opt_state), None, config.optimization.epochs)
+
+    if is_parallel:
+        return jax.pmap(scan_backward, axis_name="devices")(jnp.arange(jax.local_device_count()))
+    else:
+        return scan_backward(None)
 
 
 def default_config(universe_config):

@@ -102,5 +102,17 @@ def test_backward(config):
     assert new_params is not params
 
 
-def test_optimize(config):
-    optimize(config)
+def test_optimize_nonparallel(config):
+    params, state, forward = init_opt(config)
+    optim = optax.adam(config.optimizer.lr)
+    opt_state = optim.init(params)
+
+    optimize(config, params, state, opt_state, optim, forward)
+
+
+def test_optimize_parallel(config):
+    params, state, forward = init_opt(config)
+    optim = optax.adam(config.optimizer.lr)
+    opt_state = optim.init(params)
+
+    optimize(config, params, state, opt_state, optim, forward, is_parallel=True)
