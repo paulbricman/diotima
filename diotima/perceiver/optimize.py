@@ -135,7 +135,9 @@ def loss(
         config: ConfigDict
 ):
     data, state = forward.apply(params, state, next(config.rng), data, config, is_training=True)
-    return distance(data.pred_locs_future, data.locs_future)
+    error = distance(data.pred_locs_future, data.locs_future)
+    error += l2_penalty(params)
+    return error
 
 
 def distance(
@@ -165,6 +167,12 @@ def distance(
 
     # Iterate over batches
     return jnp.mean(jax.vmap(lambda cfs, bs: compute_batch_distances(cfs, bs))(cfs, bs))
+
+
+def l2_penalty(params):
+    # TODO: Specialize L2 regularization to specific branches of param pytree.
+    theta, unravel = jax.flatten_util.ravel_pytree(params)
+    return jnp.sum(theta ** 2)
 
 
 def backward(
