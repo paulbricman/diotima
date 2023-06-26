@@ -14,6 +14,9 @@ from jaxline import experiment
 from einops import repeat, rearrange, reduce
 from typing import Tuple, NamedTuple
 from ml_collections.config_dict import ConfigDict
+from safejax.haiku import serialize
+from pathlib import Path
+import json
 
 
 OptState = Tuple[optax.TraceState, optax.ScaleByScheduleState, optax.ScaleState]
@@ -136,7 +139,6 @@ def loss(
 ):
     data, state = forward.apply(params, state, next(config.rng), data, config, is_training=True)
     error = distance(data.pred_locs_future, data.locs_future)
-    error += l2_penalty(params)
     return error
 
 
@@ -201,7 +203,7 @@ def backward(
     return params, state, opt_state
 
 
-def optimize(
+def optimize_perceiver(
         config: ConfigDict,
         params: hk.Params,
         state: hk.State,
@@ -220,6 +222,17 @@ def optimize(
     scan_backward = lambda _: jax.lax.scan(scanned_backward, (params, state, opt_state, 0), None, config.optimization.epochs)
 
     return jax.pmap(scan_backward, axis_name="devices")(jnp.arange(jax.local_device_count()))
+
+
+def checkpoint(
+        params: hk.Params,
+        state: hk.State,
+        filepath: str
+):
+    root = Path(filepath)
+
+    serialize(params, filename=root / "params.safetensors")
+    serialize(state, filename=root / "state.safetensors")
 
 
 def default_config(universe_config):

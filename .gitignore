@@ -1,4 +1,5 @@
 tests/media/*
+tests/ckpts/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -9,6 +9,7 @@ import optax
 
 import pytest
 from ml_collections import ConfigDict
+from safejax.haiku import deserialize
 
 
 @pytest.fixture
@@ -90,11 +91,35 @@ def test_loss(config):
     assert error.size == 1
 
 
-def test_optimize(config):
+def test_optimize_perceiver(config):
     params, state, forward = init_opt(config)
     optim = optax.adam(config.optimizer.lr)
     opt_state = optim.init(params)
 
-    state, history = optimize(config, params, state, opt_state, optim, forward)
+    state, history = optimize_perceiver(config, params, state, opt_state, optim, forward)
     params, state, opt_state, epoch = state
     assert epoch == config.optimization.epochs
+
+
+def test_checkpoint(config):
+    params, state, forward = init_opt(config)
+    optim = optax.adam(config.optimizer.lr)
+    opt_state = optim.init(params)
+
+    state, history = optimize_perceiver(config, params, state, opt_state, optim, forward)
+    params, state, opt_state, epoch = state
+
+    checkpoint(params, state, "./ckpts")
+
+    new_params = deserialize("./ckpts/params.safetensors")
+    new_state = deserialize("./ckpts/state.safetensors")
+
+    assert pytrees_equal(params, new_params)
+    assert pytrees_equal(state, new_state)
+
+
+def pytrees_equal(tree1, tree2):
+    tree1, unravel = jax.flatten_util.ravel_pytree(tree1)
+    tree2, unravel = jax.flatten_util.ravel_pytree(tree2)
+    return jnp.allclose(tree1, tree2)
+
