@@ -183,11 +183,17 @@ def backward(
         optimizer,
         data: Data,
         config: ConfigDict,
-        is_parallel: bool = False
+        epoch: Array
 ):
     grads = jax.grad(loss)(params, state, opt_state, forward, data, config)
-    if is_parallel:
-        grads = jax.lax.pmean(grads, axis_name="devices")
+    agg_grads = lambda grad: jax.lax.pmean(grads, axis_name="devices")
+    no_agg_grads = lambda grad: grad
+    grads = jax.lax.cond(
+        epoch % config.optimization.agg_every == 0,
+        agg_grads,
+        no_agg_grads,
+        grads
+    )
 
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
@@ -201,30 +207,27 @@ def optimize(
         state: hk.State,
         opt_state: OptState,
         optim,
-        forward,
-        is_parallel: bool = False
+        forward
 ):
     def scanned_backward(state, _):
         data = synth_data(config)
-        params, state, opt_state = state
-        new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, config, is_parallel)
+        params, state, opt_state, epoch = state
+        new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, config, epoch)
 
-        state = new_params, new_state, new_opt_state
+        state = new_params, new_state, new_opt_state, epoch + 1
         return state, state
 
-    scan_backward = lambda _: jax.lax.scan(scanned_backward, (params, state, opt_state), None, config.optimization.epochs)
+    scan_backward = lambda _: jax.lax.scan(scanned_backward, (params, state, opt_state, 0), None, config.optimization.epochs)
 
-    if is_parallel:
-        return jax.pmap(scan_backward, axis_name="devices")(jnp.arange(jax.local_device_count()))
-    else:
-        return scan_backward(None)
+    return jax.pmap(scan_backward, axis_name="devices")(jnp.arange(jax.local_device_count()))
 
 
 def default_config(universe_config):
     config = {
         "optimization": {
-            "epochs": 2,
-            "branches": 2
+            "epochs": 3,
+            "branches": 2,
+            "agg_every": 2
         },
         "optimizer": {
             "lr": 1e-4

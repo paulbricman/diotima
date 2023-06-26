@@ -90,29 +90,11 @@ def test_loss(config):
     assert error.size == 1
 
 
-def test_backward(config):
-    data = synth_data(config)
-
-    params, state, forward = init_opt(config)
-    optim = optax.adam(config.optimizer.lr)
-    opt_state = optim.init(params)
-    new_params, new_state, new_opt_state = backward(params, state, opt_state, forward, optim, data, config)
-
-    assert params is params
-    assert new_params is not params
-
-
-def test_optimize_nonparallel(config):
+def test_optimize(config):
     params, state, forward = init_opt(config)
     optim = optax.adam(config.optimizer.lr)
     opt_state = optim.init(params)
 
-    optimize(config, params, state, opt_state, optim, forward)
-
-
-def test_optimize_parallel(config):
-    params, state, forward = init_opt(config)
-    optim = optax.adam(config.optimizer.lr)
-    opt_state = optim.init(params)
-
-    optimize(config, params, state, opt_state, optim, forward, is_parallel=True)
+    state, history = optimize(config, params, state, opt_state, optim, forward)
+    params, state, opt_state, epoch = state
+    assert epoch == config.optimization.epochs
