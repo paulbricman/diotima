@@ -126,7 +126,11 @@ def init_opt(config: ConfigDict):
 
     forward = hk.transform_with_state(raw_forward)
     params, state = forward.init(next(config.rng), data, config, True)
-    return params, state, forward
+
+    optim = optax.adam(config.optimizer.lr)
+    opt_state = optim.init(params)
+
+    return params, state, opt_state, optim, forward
 
 
 def loss(

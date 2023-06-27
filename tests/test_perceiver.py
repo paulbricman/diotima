@@ -53,7 +53,7 @@ def test_synth_data(config):
 
 def test_raw_forward(config):
     data = synth_data(config)
-    params, state, forward = init_opt(config)
+    params, state, opt_state, optim, forward = init_opt(config)
 
     out, state = forward.apply(params, state, next(config.rng), data, config, True)
 
@@ -82,19 +82,14 @@ def test_distance():
 
 def test_loss(config):
     data = synth_data(config)
-    params, state, forward = init_opt(config)
-
-    optimizer = optax.adam(config.optimizer.lr)
-    opt_state = optimizer.init(params)
+    params, state, opt_state, optim, forward = init_opt(config)
     error = loss(params, state, opt_state, forward, data, config)
 
     assert error.size == 1
 
 
 def test_optimize_perceiver(config):
-    params, state, forward = init_opt(config)
-    optim = optax.adam(config.optimizer.lr)
-    opt_state = optim.init(params)
+    params, state, opt_state, optim, forward = init_opt(config)
 
     state, history = optimize_perceiver(config, params, state, opt_state, optim, forward)
     params, state, opt_state, epoch = state
@@ -102,9 +97,7 @@ def test_optimize_perceiver(config):
 
 
 def test_checkpoint(config):
-    params, state, forward = init_opt(config)
-    optim = optax.adam(config.optimizer.lr)
-    opt_state = optim.init(params)
+    params, state, opt_state, optim, forward = init_opt(config)
 
     state, history = optimize_perceiver(config, params, state, opt_state, optim, forward)
     params, state, opt_state, epoch = state
