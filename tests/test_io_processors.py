@@ -20,35 +20,35 @@ from diotima.perceiver.perceiver import io_processors
 
 
 def _create_test_image(shape):
-  image = np.arange(np.prod(np.array(shape)))
-  return np.reshape(image, shape)
+    image = np.arange(np.prod(np.array(shape)))
+    return np.reshape(image, shape)
 
 
 def test_space_to_depth_image():
-  image_shape = (2, 3 * 5, 3 * 7, 11)
-  image = _create_test_image(image_shape)
-  output = io_processors.space_to_depth(image, spatial_block_size=3)
-  assert output.shape == (2, 5, 7, 3 * 3 * 11)
+    image_shape = (2, 3 * 5, 3 * 7, 11)
+    image = _create_test_image(image_shape)
+    output = io_processors.space_to_depth(image, spatial_block_size=3)
+    assert output.shape == (2, 5, 7, 3 * 3 * 11)
 
 
 def test_space_to_depth_video():
-  image_shape = (2, 5 * 7, 3 * 11, 3 * 13, 17)
-  image = _create_test_image(image_shape)
-  output = io_processors.space_to_depth(image, spatial_block_size=3,
-                                        temporal_block_size=5)
-  assert output.shape == (2, 7, 11, 13, 5 * 3 * 3 * 17)
+    image_shape = (2, 5 * 7, 3 * 11, 3 * 13, 17)
+    image = _create_test_image(image_shape)
+    output = io_processors.space_to_depth(image, spatial_block_size=3,
+                                          temporal_block_size=5)
+    assert output.shape == (2, 7, 11, 13, 5 * 3 * 3 * 17)
 
 
 def test_reverse_space_to_depth_image():
-  image_shape = (2, 5, 7, 3 * 3 * 11)
-  image = _create_test_image(image_shape)
-  output = io_processors.reverse_space_to_depth(image, spatial_block_size=3)
-  assert output.shape == (2, 3 * 5, 3 * 7, 11)
+    image_shape = (2, 5, 7, 3 * 3 * 11)
+    image = _create_test_image(image_shape)
+    output = io_processors.reverse_space_to_depth(image, spatial_block_size=3)
+    assert output.shape == (2, 3 * 5, 3 * 7, 11)
 
 
 def test_reverse_space_to_depth_video():
-  image_shape = (2, 7, 11, 13, 5 * 3 * 3 * 17)
-  image = _create_test_image(image_shape)
-  output = io_processors.reverse_space_to_depth(
-      image, spatial_block_size=3, temporal_block_size=5)
-  assert output.shape == (2, 5 * 7, 3 * 11, 3 * 13, 17)
+    image_shape = (2, 7, 11, 13, 5 * 3 * 3 * 17)
+    image = _create_test_image(image_shape)
+    output = io_processors.reverse_space_to_depth(
+        image, spatial_block_size=3, temporal_block_size=5)
+    assert output.shape == (2, 5 * 7, 3 * 11, 3 * 13, 17)

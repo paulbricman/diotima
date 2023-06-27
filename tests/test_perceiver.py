@@ -13,18 +13,8 @@ from safejax.haiku import deserialize
 
 
 @pytest.fixture
-def universe_config():
-    return default_universe_config()
-
-
-@pytest.fixture
-def config(universe_config):
-    return default_config(universe_config)
-
-
-@pytest.fixture
-def universe(universe_config: UniverseConfig):
-    return seed(universe_config)
+def config():
+    return default_config(default_physics_config(2), default_elem_distrib(2))
 
 
 def test_hk_next_rng(config):
@@ -55,7 +45,9 @@ def test_raw_forward(config):
     data = synth_data(config)
     params, state, opt_state, optim, forward = init_opt(config)
 
-    out, state = forward.apply(params, state, next(config.rng), data, config, True)
+    out, state = forward.apply(
+        params, state, next(
+            config.rng), data, config, True)
 
     assert out.pred_locs_future.shape == (
         config.data.n_univs,
@@ -91,19 +83,27 @@ def test_loss(config):
 def test_optimize_perceiver(config):
     params, state, opt_state, optim, forward = init_opt(config)
 
-    state, history = optimize_perceiver(config, params, state, opt_state, optim, forward)
+    state, history = optimize_perceiver(
+        config, params, state, opt_state, optim, forward)
     params, state, opt_state, epoch = state
     assert epoch == config.optimize_perceiver.epochs
 
 
-# def test_optimize_universe_config(config):
-#     optimize_universe_config(config)
+def test_optimize_universe_config(config):
+    new_config = optimize_universe_config(config)
+    assert not pytrees_equal(
+        config.data.universe_config.physics_config,
+        new_config.data.universe_config.physics_config)
+    assert not pytrees_equal(
+        config.data.universe_config.elem_distrib,
+        new_config.data.universe_config.elem_distrib)
 
 
 def test_checkpoint(config):
     params, state, opt_state, optim, forward = init_opt(config)
 
-    state, history = optimize_perceiver(config, params, state, opt_state, optim, forward)
+    state, history = optimize_perceiver(
+        config, params, state, opt_state, optim, forward)
     params, state, opt_state, epoch = state
 
     checkpoint(params, state, "./ckpts")
@@ -119,4 +119,3 @@ def pytrees_equal(tree1, tree2):
     tree1, unravel = jax.flatten_util.ravel_pytree(tree1)
     tree2, unravel = jax.flatten_util.ravel_pytree(tree2)
     return jnp.allclose(tree1, tree2)
-

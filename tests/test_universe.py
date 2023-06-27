@@ -72,8 +72,12 @@ def test_run(universe: Universe):
 
 def test_simple_run_with_adv_opt(universe: Universe):
     vanilla_universe = run(universe, 5)
-    adv_opt_universe = run(universe, 5, False, BrownianOptimizer(jax.random.PRNGKey(0)))
-    assert not jnp.allclose(vanilla_universe.atom_locs, adv_opt_universe.atom_locs)
+    adv_opt_universe = run(
+        universe, 5, False, BrownianOptimizer(
+            jax.random.PRNGKey(0)))
+    assert not jnp.allclose(
+        vanilla_universe.atom_locs,
+        adv_opt_universe.atom_locs)
 
 
 def test_trim_rerun(universe: Universe):
@@ -100,4 +104,3 @@ def test_spawn_counterfactuals(universe: Universe):
 
     # In the beginning, there was only physics (no adv opt).
     assert jnp.allclose(cfs.locs_history[0][0], cfs.locs_history[1][0])
-

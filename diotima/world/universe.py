@@ -79,7 +79,7 @@ def seed(universe_config: UniverseConfig,
 
 
 def run(universe: Universe, n_steps: int = 1,
-        get_jac: bool = False, init_adv_opt = None) -> Universe:
+        get_jac: bool = False, init_adv_opt=None) -> Universe:
     """
     Run universe `n_steps` forward.
 
@@ -178,7 +178,7 @@ def spawn_counterfactuals(
     keys = jax.random.split(key, num=n_cfs)
 
     # Run universes forward using adversarial optimizers
-    spawn_counterfactual = lambda key: run(
+    def spawn_counterfactual(key): return run(
         common_thread,
         universe.step - start,
         False,

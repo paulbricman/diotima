@@ -53,13 +53,13 @@ def atom_locs_render():
 def universe_config():
     n_elems = 2
     return UniverseConfig(
-            n_elems,
-            n_atoms=2,
-            n_dims=3,
-            dt=0.1,
-            physics_config=physics.default_physics_config(n_elems),
-            elem_distrib=physics.default_elem_distrib(n_elems)
-        )
+        n_elems,
+        n_atoms=2,
+        n_dims=3,
+        dt=0.1,
+        physics_config=physics.default_physics_config(n_elems),
+        elem_distrib=physics.default_elem_distrib(n_elems)
+    )
 
 
 @pytest.fixture
