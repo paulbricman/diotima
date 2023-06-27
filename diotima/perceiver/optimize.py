@@ -83,9 +83,9 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
     input, _, input_without_pos = preprocessor(input, pos)
     encoder_query = encoder.latents(input)
 
-    decoder_query_input = repeat(data.atom_elems, "u a e -> u (b a) e", b=config.optimization.branches)
-    decoder_query_space_pos = repeat(atom_locs, "u a l -> u (b a) l", b=config.optimization.branches)
-    decoder_query_branch_pos = repeat(jnp.arange(config.optimization.branches), "b -> u (b a) 1", u=config.data.n_univs, a=n_atoms)
+    decoder_query_input = repeat(data.atom_elems, "u a e -> u (b a) e", b=config.optimize_perceiver.branches)
+    decoder_query_space_pos = repeat(atom_locs, "u a l -> u (b a) l", b=config.optimize_perceiver.branches)
+    decoder_query_branch_pos = repeat(jnp.arange(config.optimize_perceiver.branches), "b -> u (b a) 1", u=config.data.n_univs, a=n_atoms)
 
     decoder_query_pos = jnp.concatenate((decoder_query_space_pos, decoder_query_branch_pos), axis=2)
 
@@ -106,7 +106,7 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
             return state, state
 
         forecast = jax.lax.scan(inject_one_step, decoder_query_space_pos, None, future_steps)
-        forecast = rearrange(forecast[1], "t u (b a) l -> u t a b l", b=config.optimization.branches)
+        forecast = rearrange(forecast[1], "t u (b a) l -> u t a b l", b=config.optimize_perceiver.branches)
         return forecast
 
     forecast = preds_to_forecast()
@@ -127,7 +127,7 @@ def init_opt(config: ConfigDict):
     forward = hk.transform_with_state(raw_forward)
     params, state = forward.init(next(config.rng), data, config, True)
 
-    optim = optax.adam(config.optimizer.lr)
+    optim = optax.adam(config.optimize_perceiver.lr)
     opt_state = optim.init(params)
 
     return params, state, opt_state, optim, forward
@@ -195,7 +195,7 @@ def backward(
     agg_grads = lambda grad: jax.lax.pmean(grads, axis_name="devices")
     no_agg_grads = lambda grad: grad
     grads = jax.lax.cond(
-        epoch % config.optimization.agg_every == 0,
+        epoch % config.optimize_perceiver.agg_every == 0,
         agg_grads,
         no_agg_grads,
         grads
@@ -223,9 +223,49 @@ def optimize_perceiver(
         state = new_params, new_state, new_opt_state, epoch + 1
         return state, state
 
-    scan_backward = lambda _: jax.lax.scan(scanned_backward, (params, state, opt_state, 0), None, config.optimization.epochs)
+    scan_backward = lambda _: jax.lax.scan(scanned_backward, (params, state, opt_state, 0), None, config.optimize_perceiver.epochs)
 
     return jax.pmap(scan_backward, axis_name="devices")(jnp.arange(jax.local_device_count()))
+
+
+def optimize_universe_config(config: ConfigDict):
+    optim = optax.adam(config.optimize_universe_config.lr)
+    opt_state = optim.init(params)
+
+    def universe_config_state_to_config(universe_config_state):
+        physics_config, elem_distrib = universe_config_state
+        config.data.universe_config.physics_config = physics_config
+        config.data.universe_config.elem_distrib = elem_distrib
+        return config
+
+    def param_count(universe_config_state):
+        config = universe_config_state_to_config(universe_config_state)
+
+        params, state, opt_state, optim, forward = init_opt(config)
+        state, history = optimize_perceiver(config, params, state, opt_state, optim, forward)
+        params, state, opt_state, epoch = state
+        return l2_penalty(params)
+
+    def scanned_optimize_universe_config(state, _):
+        universe_config_state, opt_state = state
+        param_count, grads = jax.value_and_grad(config_to_param_count)(universe_config_state)
+        updates, opt_state = optimizer.update(grads, opt_state, universe_config_state)
+        universe_config_state = optax.apply_updates(state, universe_config_state)
+        state = universe_config_state, opt_state
+
+        return state, state
+
+    universe_config_state = (config.data.universe_config.physics_config,
+                             config.data.universe_config.elem_distrib)
+
+    state, history = jax.lax.scan(scanned_optimize_universe_config,
+                                  (universe_config_state, opt_state),
+                                  0,
+                                  config.optimize_universe_config.epochs)
+
+    universe_config_state, opt_state = state
+    config = universe_config_state_to_config(universe_config_state)
+    return config
 
 
 def checkpoint(
@@ -241,13 +281,15 @@ def checkpoint(
 
 def default_config(universe_config):
     config = {
-        "optimization": {
+        "optimize_perceiver": {
             "epochs": 3,
             "branches": 2,
-            "agg_every": 2
+            "agg_every": 2,
+            "lr": 1e-4,
         },
-        "optimizer": {
-            "lr": 1e-4
+        "optimize_universe_config": {
+            "epochs": 3,
+            "lr": 1e-4,
         },
         "data": {
             "n_univs": 3,

@@ -61,7 +61,7 @@ def test_raw_forward(config):
         config.data.n_univs,
         (config.data.steps - config.data.start),
         int(out.universe_config.n_atoms[0]),
-        config.optimization.branches,
+        config.optimize_perceiver.branches,
         int(out.universe_config.n_dims[0])
     )
 
@@ -93,7 +93,11 @@ def test_optimize_perceiver(config):
 
     state, history = optimize_perceiver(config, params, state, opt_state, optim, forward)
     params, state, opt_state, epoch = state
-    assert epoch == config.optimization.epochs
+    assert epoch == config.optimize_perceiver.epochs
+
+
+# def test_optimize_universe_config(config):
+#     optimize_universe_config(config)
 
 
 def test_checkpoint(config):
