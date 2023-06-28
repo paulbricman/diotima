@@ -119,3 +119,9 @@ def pytrees_equal(tree1, tree2):
     tree1, unravel = jax.flatten_util.ravel_pytree(tree1)
     tree2, unravel = jax.flatten_util.ravel_pytree(tree2)
     return jnp.allclose(tree1, tree2)
+
+
+def test_distributed(config):
+    jax.distributed.initialize(config.infra.coordinator_address,
+                               config.infra.num_hosts,
+                               config.infra.process_id)

@@ -301,7 +301,7 @@ def optimize_universe_config(config: ConfigDict):
                                                       opt_state),
                                                      None,
                                                      config.optimize_universe_config.epochs),
-                              axis_name="hosts")(jnp.arange(config.optimize_universe_config.num_hosts))
+                              axis_name="hosts")(jnp.arange(config.infra.num_hosts))
 
     universe_config_state, opt_state = state
     config = universe_config_state_to_config(universe_config_state)
@@ -321,6 +321,13 @@ def checkpoint(
 
 def default_config(physics_config=None, elem_distrib=None):
     config = {
+        "infra": {
+            "coordinator_address": "127.0.0.1:8888",
+            "num_hosts": 1,
+            "accelerator-type": "v3-8",
+            "zone": "europe-west4-a",
+            "process_id": 0
+        },
         "optimize_perceiver": {
             "epochs": 2,
             "branches": 2,
@@ -330,8 +337,7 @@ def default_config(physics_config=None, elem_distrib=None):
         },
         "optimize_universe_config": {
             "epochs": 2,
-            "lr": 1e-4,
-            "num_hosts": 1,
+            "lr": 1e-4
         },
         "data": {
             "n_univs": 3,
