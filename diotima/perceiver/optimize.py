@@ -167,6 +167,8 @@ def loss(
     data, state = forward.apply(params, state, next(
         config.rng), data, config, is_training=True)
     error = distance(data.pred_locs_future, data.locs_future)
+    l2_penalty = compute_l2_penalty(params) * config.optimize_perceiver.regularization_weight
+    error += l2_penalty
     return error
 
 
@@ -200,7 +202,7 @@ def distance(
         jax.vmap(lambda cfs, bs: compute_batch_distances(cfs, bs))(cfs, bs))
 
 
-def l2_penalty(params):
+def compute_l2_penalty(params):
     # TODO: Specialize L2 regularization to specific branches of param pytree.
     theta, unravel = jax.flatten_util.ravel_pytree(params)
     return jnp.sum(theta ** 2)
@@ -274,7 +276,7 @@ def optimize_universe_config(config: ConfigDict):
         state, history = optimize_perceiver(
             config, params, state, opt_state, optim, forward)
         params, state, opt_state, epoch = state
-        return l2_penalty(params)
+        return compute_l2_penalty(params)
 
     def scanned_optimize_universe_config(state, _):
         universe_config_state, opt_state = state
@@ -324,6 +326,7 @@ def default_config(physics_config=None, elem_distrib=None):
             "branches": 2,
             "agg_every": 2,
             "lr": 1e-4,
+            "regularization_weight": 1e-4
         },
         "optimize_universe_config": {
             "epochs": 2,
