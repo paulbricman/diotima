@@ -61,10 +61,10 @@ def attend(q, k, v, dropout_prob=0.0, attention_mask=None):
         attention = jnp.where(attention_mask[:, None, :, :], attention,
                               -large_k)
 
-    normalized = jax.nn.softmax(attention)
+    scores = jax.nn.softmax(attention)
     if dropout_prob > 0:
-        normalized = hk.dropout(hk.next_rng_key(), dropout_prob, normalized)
-    summed = jnp.einsum('bhtT,bThd->bthd', normalized, v)
+        scores = hk.dropout(hk.next_rng_key(), dropout_prob, scores)
+    summed = jnp.einsum('bhtT,bThd->bthd', scores, v)
     summed = jnp.reshape(summed, [batch, q_indices, hiddens])
 
     if attention_mask is not None:
@@ -75,7 +75,7 @@ def attend(q, k, v, dropout_prob=0.0, attention_mask=None):
         wipe_attn = jnp.all(
             attention_mask == 0, axis=2, keepdims=True)  # shape (B, T, 1)
         summed = jnp.where(wipe_attn, jnp.zeros_like(summed), summed)
-    return summed
+    return summed, scores
 
 
 def conv_1d(
@@ -174,12 +174,12 @@ class Attention(hk.Module):
         v = jnp.reshape(
             v, [batch, kv_time, self._num_heads, v_channels_per_head])
 
-        result = attend(q, k, v, dropout_prob=self._dropout_prob,
+        result, scores = attend(q, k, v, dropout_prob=self._dropout_prob,
                         attention_mask=attention_mask)
         return conv_1d(
             self._output_channels,
             with_bias=self._with_final_bias,
-            init_scale=self._final_init_scale)(result)
+            init_scale=self._final_init_scale)(result), scores
 
 
 class MLP(hk.Module):
@@ -241,22 +241,22 @@ class SelfAttention(hk.Module):
 
         x = inputs
         qkv_inputs = layer_norm(inputs)
-        attention = Attention(
+        results, scores = Attention(
             num_heads=self._num_heads,
             init_scale=self._att_init_scale,
             qk_channels=self._qk_channels,
             v_channels=self._v_channels,
             dropout_prob=dropout_attn_prob)(qkv_inputs, qkv_inputs,
                                             attention_mask=attention_mask)
-        attention = hk.dropout(hk.next_rng_key(), dropout_prob, attention)
-        x += attention
+        results = hk.dropout(hk.next_rng_key(), dropout_prob, results)
+        x += results
 
         x += MLP(
             widening_factor=self._widening_factor,
             dropout_prob=dropout_prob,
             init_scale=self._dense_init_scale)(
                 layer_norm(x), is_training=is_training)
-        return x
+        return x, scores
 
 
 class CrossAttention(hk.Module):
@@ -310,7 +310,7 @@ class CrossAttention(hk.Module):
         if self._v_channels is not None:
             v_channels = self._v_channels
 
-        attention = Attention(
+        results, scores = Attention(
             num_heads=self._num_heads,
             init_scale=self._att_init_scale,
             dropout_prob=dropout_attn_prob,
@@ -319,79 +319,27 @@ class CrossAttention(hk.Module):
             output_channels=output_channels)(layer_norm(inputs_q),
                                              layer_norm(inputs_kv),
                                              attention_mask=attention_mask)
-        attention = hk.dropout(hk.next_rng_key(), dropout_prob, attention)
+        results = hk.dropout(hk.next_rng_key(), dropout_prob, results)
 
         # Optionally include a residual to the query.
         # Consider omitting the residual if the semantics of query and output
         # are different, e.g. if queries are positions and outputs are pixels.
         if self._use_query_residual:
-            x = inputs_q + attention
+            x = inputs_q + results
         else:
-            x = attention
+            x = results
 
         x += MLP(
             widening_factor=self._widening_factor,
             dropout_prob=dropout_prob,
             init_scale=self._dense_init_scale)(
                 layer_norm(x), is_training=is_training)
-        return x
+        return x, scores
 
 
 #  -----------------------------------------------------------
 #  -----------------------  Perceiver  -----------------------
 #  -----------------------------------------------------------
-
-
-class Perceiver(hk.Module):
-    """The Perceiver: a scalable, fully attentional architecture."""
-
-    def __init__(
-            self,
-            encoder,
-            decoder,
-            input_preprocessor=None,
-            output_postprocessor=None,
-            name='perceiver'):
-        super().__init__(name=name)
-
-        # Feature and task parameters:
-        self._input_preprocessor = input_preprocessor
-        self._output_postprocessor = output_postprocessor
-        self._decoder = decoder
-        self._encoder = encoder
-
-    def __call__(self, inputs, *, is_training, subsampled_output_points=None,
-                 pos=None, input_mask=None, query_mask=None):
-        if self._input_preprocessor:
-            network_input_is_1d = self._encoder._input_is_1d
-            inputs, modality_sizes, inputs_without_pos = self._input_preprocessor(
-                inputs, pos=pos, is_training=is_training,
-                network_input_is_1d=network_input_is_1d)
-        else:
-            modality_sizes = None
-            inputs_without_pos = None
-
-        # Get the queries for encoder and decoder cross-attends.
-        encoder_query = self._encoder.latents(inputs)
-        decoder_query = self._decoder.decoder_query(
-            inputs, modality_sizes, inputs_without_pos,
-            subsampled_points=subsampled_output_points)
-
-        # Run the network forward:
-        z = self._encoder(inputs, encoder_query,
-                          is_training=is_training, input_mask=input_mask)
-        _, output_modality_sizes = self._decoder.output_shape(
-            inputs)
-        output_modality_sizes = output_modality_sizes or modality_sizes
-
-        outputs = self._decoder(
-            decoder_query, z, is_training=is_training, query_mask=query_mask)
-
-        if self._output_postprocessor:
-            outputs = self._output_postprocessor(outputs, is_training=is_training,
-                                                 modality_sizes=output_modality_sizes)
-
-        return outputs
 
 
 class PerceiverEncoder(hk.Module):
@@ -469,12 +417,20 @@ class PerceiverEncoder(hk.Module):
             attention_mask = make_cross_attention_mask(
                 query_mask=jnp.ones(z.shape[:2], dtype=jnp.int32),
                 kv_mask=input_mask)
-        z = self.cross_attend(z, inputs, is_training=is_training,
+        # Relevant: https://github.com/deepmind/deepmind-research/issues/253
+        z, cross_scores = self.cross_attend(z, inputs, is_training=is_training,
                               attention_mask=attention_mask)
+
+        all_self_scores = []
         for _ in range(self._num_blocks):
             for self_attend in self.self_attends:
-                z = self_attend(z, is_training=is_training)
-        return z
+                z, self_scores = self_attend(z, is_training=is_training)
+                all_self_scores += [self_scores]
+                # TODO: Return scores.
+                # Rollout through xattn, _num_blocks attn?
+        all_self_scores = jnp.array(all_self_scores)
+
+        return z, (cross_scores, all_self_scores)
 
 
 class AbstractPerceiverDecoder(hk.Module, metaclass=abc.ABCMeta):
@@ -492,35 +448,6 @@ class AbstractPerceiverDecoder(hk.Module, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def __call__(self, query, z, *, is_training, query_mask=None):
         raise NotImplementedError
-
-
-class ProjectionDecoder(AbstractPerceiverDecoder):
-    """Baseline projection decoder (no cross-attention)."""
-
-    def __init__(
-            self,
-            num_classes,
-            final_avg_before_project=False,
-            name='projection_decoder'):
-        super().__init__(name=name)
-        self._final_avg_before_project = final_avg_before_project
-        self._num_classes = num_classes
-        self.final_layer = hk.Linear(
-            num_classes, w_init=jnp.zeros, name='logits')
-
-    def decoder_query(self, inputs, modality_sizes=None, inputs_without_pos=None,
-                      subsampled_points=None):
-        return None
-
-    def output_shape(self, inputs):
-        return ((inputs.shape[0], self._num_classes), None)
-
-    def __call__(self, query, z, *, is_training, query_mask=None):
-        # b x n_z x c -> b x c
-        z = jnp.mean(z, axis=1, dtype=z.dtype)
-        # b x c -> b x n_logits
-        logits = self.final_layer(z)
-        return logits
 
 
 class BasicDecoder(AbstractPerceiverDecoder):
@@ -621,204 +548,10 @@ class BasicDecoder(AbstractPerceiverDecoder):
             qk_channels=self._qk_channels,
             v_channels=self._v_channels,
             use_query_residual=self._use_query_residual)
-        final_layer = hk.Linear(
-            self._output_num_channels, w_init=self._output_w_init, name='output')
-        output = decoding_cross_attn(query, z, is_training=is_training,
+        output, scores = decoding_cross_attn(query, z, is_training=is_training,
                                      attention_mask=attention_mask)
         if self._final_project:
+            final_layer = hk.Linear(
+                self._output_num_channels, w_init=self._output_w_init, name='output')
             output = final_layer(output)
         return output
-
-
-class ClassificationDecoder(AbstractPerceiverDecoder):
-    """Cross-attention based classification decoder.
-
-    Light-weight wrapper of `BasicDecoder` for logit output.
-    """
-
-    def __init__(self,
-                 num_classes,
-                 name='classification_decoder',
-                 **decoder_kwargs):
-        super().__init__(name=name)
-
-        self._num_classes = num_classes
-        self.decoder = BasicDecoder(
-            output_index_dims=(1,),  # Predict a single logit array.
-            output_num_channels=num_classes,
-            **decoder_kwargs)
-
-    def decoder_query(self, inputs, modality_sizes=None,
-                      inputs_without_pos=None, subsampled_points=None):
-        return self.decoder.decoder_query(inputs, modality_sizes,
-                                          inputs_without_pos,
-                                          subsampled_points=subsampled_points)
-
-    def output_shape(self, inputs):
-        return (inputs.shape[0], self._num_classes), None
-
-    def __call__(self, query, z, *, is_training, query_mask=None):
-        # B x 1 x num_classes -> B x num_classes
-        logits = self.decoder(query, z, is_training=is_training)
-        return logits[:, 0, :]
-
-
-class MultimodalDecoder(AbstractPerceiverDecoder):
-    """Multimodal decoding by composing uni-modal decoders.
-
-    The modalities argument of the constructor is a dictionary mapping modality
-    name to the decoder of that modality. That decoder will be used to construct
-    queries for that modality. However, there is a shared cross attention across
-    all modalities, using the concatenated per-modality query vectors.
-    """
-
-    def __init__(self, modalities, num_outputs, output_num_channels,
-                 min_padding_size=2,
-                 subsampled_index_dims=None,
-                 name='multimodal_decoder', **decoder_kwargs):
-        super().__init__(name=name)
-        self._modalities = modalities
-        self._subsampled_index_dims = subsampled_index_dims
-        self._min_padding_size = min_padding_size
-        self._output_num_channels = output_num_channels
-        self._num_outputs = num_outputs
-        self._decoder = BasicDecoder(
-            output_index_dims=(num_outputs,),
-            output_num_channels=output_num_channels,
-            position_encoding_type='none',
-            **decoder_kwargs)
-
-    def decoder_query(self, inputs, modality_sizes, inputs_without_pos=None,  # pytype: disable=signature-mismatch  # overriding-parameter-count-checks
-                      subsampled_points=None):
-        # Partition the flat inputs among the different modalities
-        inputs = io_processors.restructure(modality_sizes, inputs)
-        # Obtain modality-specific decoders' queries
-        subsampled_points = subsampled_points or dict()
-        decoder_queries = dict()
-        for modality, decoder in self._modalities.items():
-            # Get input_without_pos for this modality if it exists.
-            input_without_pos = None
-            if inputs_without_pos is not None:
-                input_without_pos = inputs_without_pos.get(modality, None)
-            decoder_queries[modality] = decoder.decoder_query(
-                inputs=inputs[modality],
-                modality_sizes=None,
-                inputs_without_pos=input_without_pos,
-                subsampled_points=subsampled_points.get(modality, None)
-            )
-
-        # Pad all queries with trainable position encodings to make them
-        # have the same channels
-        num_channels = (max(query.shape[2] for query in decoder_queries.values())
-                        + self._min_padding_size)
-
-        def embed(modality, x):
-            x = jnp.reshape(
-                x, [x.shape[0], np.prod(x.shape[1:-1]), x.shape[-1]])
-            pos = position_encoding.TrainablePositionEncoding(
-                1, num_channels=num_channels - x.shape[2],
-                init_scale=0.02, name=f'{modality}_padding')(x.shape[0])
-            pos = jnp.broadcast_to(
-                pos, [x.shape[0], x.shape[1], num_channels - x.shape[2]])
-            return jnp.concatenate([x, pos], axis=2)
-
-        # Apply a predictable ordering to the modalities
-        return jnp.concatenate([
-            embed(modality, decoder_queries[modality])
-            for modality in sorted(self._modalities.keys())
-        ], axis=1)
-
-    def output_shape(self, inputs):
-        if self._subsampled_index_dims is not None:
-            subsampled_index_dims = sum(self._subsampled_index_dims.values())
-        else:
-            subsampled_index_dims = self._num_outputs
-        return ((inputs.shape[0], subsampled_index_dims, self._output_num_channels),
-                self._subsampled_index_dims)
-
-    def __call__(self, query, z, *, is_training, query_mask=None):
-        # B x 1 x num_classes -> B x num_classes
-        return self._decoder(query, z, is_training=is_training)
-
-
-class BasicVideoAutoencodingDecoder(AbstractPerceiverDecoder):
-    """Cross-attention based video-autoencoding decoder.
-
-    Light-weight wrapper of `BasicDecoder` with video reshaping logic.
-    """
-
-    def __init__(self,
-                 output_shape,
-                 position_encoding_type,
-                 name='basic_video_autoencoding_decoder',
-                 **decoder_kwargs):
-        super().__init__(name=name)
-        if len(output_shape) != 4:  # B, T, H, W
-            raise ValueError(
-                f'Expected rank 4 output_shape, got {output_shape}.')
-        # Build the decoder components:
-        self._output_shape = output_shape
-        self._output_num_channels = decoder_kwargs['output_num_channels']
-
-        self.decoder = BasicDecoder(
-            output_index_dims=self._output_shape[1:4],  # T*H*W
-            position_encoding_type=position_encoding_type,
-            **decoder_kwargs)
-
-    def decoder_query(self, inputs, modality_sizes=None,
-                      inputs_without_pos=None, subsampled_points=None):
-        return self.decoder.decoder_query(inputs,
-                                          modality_sizes=modality_sizes,
-                                          inputs_without_pos=inputs_without_pos,
-                                          subsampled_points=subsampled_points)
-
-    def output_shape(self, inputs):
-        return ([inputs.shape[0]] + self._output_shape[1:] +
-                [self._output_num_channels], None)
-
-    def __call__(self, query, z, *, is_training, query_mask=None):
-        output = self.decoder(query, z, is_training=is_training)
-
-        output = jnp.reshape(output, self._output_shape + [output.shape[-1]])
-        return output
-
-
-class FlowDecoder(AbstractPerceiverDecoder):
-    """Cross-attention based flow decoder."""
-
-    def __init__(self,
-                 output_image_shape,
-                 output_num_channels=2,
-                 rescale_factor=100.0,
-                 name='flow_decoder',
-                 **decoder_kwargs):
-        super().__init__(name=name)
-
-        self._output_image_shape = output_image_shape
-        self._output_num_channels = output_num_channels
-        self._rescale_factor = rescale_factor
-        self.decoder = BasicDecoder(
-            output_num_channels=output_num_channels,
-            **decoder_kwargs)
-
-    def output_shape(self, inputs):
-        # The channel dimensions of output here don't necessarily correspond to
-        # (u, v) of flow: they may contain dims needed for the post-processor.
-        return ((inputs.shape[0],) + tuple(self._output_image_shape) + (
-            self._output_num_channels,), None)
-
-    def decoder_query(
-            self, inputs, modality_sizes=None, inputs_without_pos=None,
-            subsampled_points=None):
-        if subsampled_points is not None:
-            raise ValueError("FlowDecoder doesn't support subsampling yet.")
-        # assumes merged in time
-        return inputs
-
-    def __call__(self, query, z, *, is_training, query_mask=None):
-        # Output flow and rescale.
-        preds = self.decoder(query, z, is_training=is_training)
-        preds /= self._rescale_factor
-
-        return preds.reshape([preds.shape[0]] + list(self._output_image_shape) +
-                             [preds.shape[-1]])

@@ -46,15 +46,15 @@ def test_raw_forward(config):
     params, state, opt_state, optim, forward = init_opt(config)
 
     out, state = forward.apply(
-        params, state, next(
-            config.rng), data, config, True)
+        params, state, next(config.rng), data, config, True)
+    data, agents = out
 
-    assert out.pred_locs_future.shape == (
+    assert data.pred_locs_future.shape == (
         config.data.n_univs,
         (config.data.steps - config.data.start),
-        int(out.universe_config.n_atoms[0]),
+        int(data.universe_config.n_atoms[0]),
         config.optimize_perceiver.branches,
-        int(out.universe_config.n_dims[0])
+        int(data.universe_config.n_dims[0])
     )
 
 

@@ -33,6 +33,11 @@ class Data(NamedTuple):
     pred_locs_future: Array
 
 
+class Agents(NamedTuple):
+    flows: Array
+    substrates: Array
+
+
 def synth_universe_data(config: ConfigDict):
     universe_config = UniverseConfig(**config.data.universe_config)
     universe = seed(universe_config, next(config.rng))
@@ -107,7 +112,7 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
     decoder_query, _, decoder_query_without_pos = preprocessor(
         decoder_query_input, decoder_query_pos)
 
-    latents = encoder(input, encoder_query, is_training=is_training)
+    latents, scores = encoder(input, encoder_query, is_training=is_training)
 
     def decode_slot(latent):
         latent = rearrange(latent, "u z -> u 1 z")
@@ -134,7 +139,7 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
 
     forecast = preds_to_forecast()
 
-    return Data(
+    enriched_data = Data(
         data.universe_config,
         data.atom_elems,
         data.idx_history,
@@ -142,6 +147,14 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
         data.locs_future,
         forecast
     )
+
+    agents = Agents(
+        one_step_preds,
+        # TODO: Rollout attention scores to substrates.
+        scores
+    )
+
+    return enriched_data, agents
 
 
 def init_opt(config: ConfigDict):
@@ -164,8 +177,9 @@ def loss(
         data: Data,
         config: ConfigDict
 ):
-    data, state = forward.apply(params, state, next(
+    out, state = forward.apply(params, state, next(
         config.rng), data, config, is_training=True)
+    data, agents = out
     error = distance(data.pred_locs_future, data.locs_future)
     l2_penalty = compute_l2_penalty(params) * config.optimize_perceiver.regularization_weight
     error += l2_penalty
