@@ -52,9 +52,23 @@ def test_raw_forward(config):
     assert data.pred_locs_future.shape == (
         config.data.n_univs,
         (config.data.steps - config.data.start),
-        int(data.universe_config.n_atoms[0]),
+        config.data.universe_config.n_atoms,
         config.optimize_perceiver.branches,
-        int(data.universe_config.n_dims[0])
+        config.data.universe_config.n_dims
+    )
+
+    assert agents.substrates.shape == (
+        config.data.n_univs,
+        config.data.start * config.data.universe_config.n_atoms,
+        config.encoder.z_index_dim
+    )
+
+    assert agents.flows.shape == (
+        config.data.n_univs,
+        config.optimize_perceiver.branches,
+        config.encoder.z_index_dim,
+        config.data.universe_config.n_atoms,
+        config.data.universe_config.n_dims
     )
 
 

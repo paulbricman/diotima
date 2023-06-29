@@ -120,6 +120,7 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
 
     one_step_preds = jax.vmap(decode_slot, in_axes=1)(latents)
     agg_one_step_preds = reduce(one_step_preds, "z u a l -> u a l", "sum")
+    flows = rearrange(one_step_preds, "z u (b a) l -> u b z a l", b=config.optimize_perceiver.branches)
 
     def preds_to_forecast():
         def inject_one_step(state, _):
@@ -149,12 +150,32 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
     )
 
     agents = Agents(
-        one_step_preds,
-        # TODO: Rollout attention scores to substrates.
-        scores
+        flows,
+        compute_attn_rollouts(scores)
     )
 
     return enriched_data, agents
+
+
+def compute_attn_rollouts(scores, repr_self_residual=True):
+    cross, self = scores
+    cross = reduce(cross, "u cah z a -> u a z", "sum")
+    self = reduce(self, "sa u sah z1 z2 -> u sa z1 z2", "sum")
+
+    def compute_attn_rollout(self, cross):
+        if repr_self_residual:
+            # Relevant: https://arxiv.org/pdf/2005.00928.pdf#page=3
+            z = self.shape[-1]
+            self += jnp.eye(z)
+            norm_factor = repeat(jnp.sum(self, axis=(1, 2)), "sa -> sa z1 z2", z1=z, z2=z)
+            self /= norm_factor
+
+        # Relevant: https://github.com/deepmind/deepmind-research/issues/253
+        first = [cross @ self[0]]
+        rest = list(self[1:])
+        return jnp.linalg.multi_dot(first + rest)
+
+    return jax.vmap(compute_attn_rollout)(self, cross)
 
 
 def init_opt(config: ConfigDict):
@@ -378,14 +399,16 @@ def default_config(physics_config=None, elem_distrib=None):
         },
         "encoder": {
             "z_index_dim": 7,
-            "num_z_channels": 8,
+            "num_z_channels": 4,
+            "num_cross_attend_heads": 1,
             "num_blocks": 1,
-            "num_self_attends_per_block": 1,
+            "num_self_attends_per_block": 2,
             "num_self_attend_heads": 1
         },
         "decoder": {
             "output_num_channels": 2,  # Has to match n_dims
             "num_z_channels": 8,
+            "use_query_residual": False,
             "position_encoding_type": "fourier",
             "fourier_position_encoding_kwargs": {
                 "num_bands": 1,
