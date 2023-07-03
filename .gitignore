@@ -2,6 +2,9 @@ tests/media/*
 tests/ckpts/*
 */__pycache__/
 */__pycache__/
+*.safetensors
+tests/params.safetensors
+tests/state.safetensors
 
 
 # Byte-compiled / optimized / DLL files

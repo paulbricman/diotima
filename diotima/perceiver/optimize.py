@@ -16,7 +16,7 @@ from typing import Tuple, NamedTuple
 from ml_collections.config_dict import ConfigDict
 from safejax.haiku import serialize
 from pathlib import Path
-import json
+import os
 
 
 OptState = Tuple[optax.TraceState,
@@ -283,6 +283,7 @@ def optimize_perceiver(
         new_params, new_state, new_opt_state = backward(
             params, state, opt_state, forward, optim, data, config, epoch)
 
+        checkpoint(params, state, ".")
         state = new_params, new_state, new_opt_state, epoch + 1
         return state, state
 
@@ -361,7 +362,7 @@ def default_config(physics_config=None, elem_distrib=None):
             "num_hosts": 1,
             "accelerator-type": "v3-8",
             "zone": "europe-west4-a",
-            "process_id": 0
+            "process_id": os.environ.get("PROCESS_ID", 0)
         },
         "optimize_perceiver": {
             "epochs": 2,
