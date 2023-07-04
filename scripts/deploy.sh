@@ -22,36 +22,23 @@ for i in {0..0}; do echo "[*] Copying codebase to tpu-vm-"$i"..."; \
     done
 
 # 3. Run VMs (w/ local env var).
-
-# 5. Fetch checkpoints.
-echo "[*] Copying codebase to tpu-vm-"$i"..."; gcloud compute tpus tpu-vm scp tpu-test-0:~/config.pickle ./ --zone=us-central1-f
-
-# 6. Delete all VMs.
-for i in {0..0}; do echo "[*] Deleting tpu-vm-"$i"..."; gcloud compute tpus tpu-vm delete tpu-test-$i --zone=us-central1-f; done
-
-# Scraps
-
-gcloud compute tpus tpu-vm list --zone=us-central1-f
-
-gcloud compute tpus tpu-vm ssh tpu-test-0 --zone=us-central1-f
-
-gcloud compute tpus tpu-vm describe tpu-test-0  --zone=us-central1-f
-
-gcloud compute tpus tpu-vm ssh tpu-test-0 --zone=us-central1-f
-
-for i in {0..0}; do echo "[*] Printing process ID to tpu-vm-"$i"..."; \
+for i in {0..0}; do echo "[*] Running master script on tpu-vm-"$i"..."; \
                     gcloud compute tpus tpu-vm ssh tpu-test-$i \
                            --zone=us-central1-f \
-                           --command="echo 'hello world'"; \
+                           --command="wget https://repo.anaconda.com/miniconda/Miniconda3-py310_23.3.1-0-Linux-x86_64.sh -O ~/miniconda.sh; \
+                           chmod +x ~/miniconda.sh; \
+                          ~/miniconda.sh -b -p ~/miniconda; \
+                          export PATH='~/miniconda/bin:$PATH'; \
+                          conda init bash; \
+                          source \"$HOME/miniconda/bin/activate\"; \
+                          conda env create -f environment.yml; \
+                          conda activate diotima; \
+                          mkdir ckpts; \
+                          python optimize.py"; \
     done
 
-wget https://repo.anaconda.com/miniconda/Miniconda3-py310_23.3.1-0-Linux-x86_64.sh -O ~/miniconda.sh
-chmod +x ~/miniconda.sh
-~/miniconda.sh -b -p ~/miniconda
-export PATH="~/miniconda/bin:$PATH"
-conda init bash
-exec bash
-conda env create -f environment.yml
-conda activate diotima
-mkdir ckpts
-python optimize.py
+# 4. Fetch checkpoints.
+echo "[*] Copying codebase to tpu-vm-"$i"..."; gcloud compute tpus tpu-vm scp tpu-test-0:~/config.pickle ./ --zone=us-central1-f
+
+# 5. Delete all VMs.
+for i in {0..0}; do echo "[*] Deleting tpu-vm-"$i"..."; gcloud compute tpus tpu-vm delete tpu-test-$i --zone=us-central1-f; done

@@ -356,11 +356,9 @@ def checkpoint(
 def default_config(physics_config=None, elem_distrib=None):
     config = {
         "infra": {
-            "coordinator_address": "127.0.0.1:8888",
-            "num_hosts": 1,
-            "accelerator-type": "v3-8",
-            "zone": "europe-west4-a",
-            "process_id": os.environ.get("PROCESS_ID", 0)
+            "coordinator_address": os.environ.get("JAX_COORD_ADDR", "127.0.0.1:8888"),
+            "num_hosts": os.environ.get("JAX_NUM_HOSTS", 1),
+            "process_id": os.environ.get("JAX_PROCESS_ID", 0)
         },
         "optimize_perceiver": {
             "epochs": 2,
