@@ -5,6 +5,7 @@ tests/ckpts/*
 *.safetensors
 tests/params.safetensors
 tests/state.safetensors
+*.pickle
 
 
 # Byte-compiled / optimized / DLL files

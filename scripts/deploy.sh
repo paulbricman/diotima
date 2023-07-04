@@ -21,13 +21,10 @@ for i in {0..0}; do echo "[*] Copying codebase to tpu-vm-"$i"..."; \
                            --zone=us-central1-f; \
     done
 
-# 3. Run provisioning script on all VMs (w/ local env var).
-
-
-p
-# 4. Run optimization script on all VMs (w/ local env var).
+# 3. Run VMs (w/ local env var).
 
 # 5. Fetch checkpoints.
+echo "[*] Copying codebase to tpu-vm-"$i"..."; gcloud compute tpus tpu-vm scp tpu-test-0:~/config.pickle ./ --zone=us-central1-f
 
 # 6. Delete all VMs.
 for i in {0..0}; do echo "[*] Deleting tpu-vm-"$i"..."; gcloud compute tpus tpu-vm delete tpu-test-$i --zone=us-central1-f; done
@@ -36,7 +33,7 @@ for i in {0..0}; do echo "[*] Deleting tpu-vm-"$i"..."; gcloud compute tpus tpu-
 
 gcloud compute tpus tpu-vm list --zone=us-central1-f
 
-gcloud compute tpus tpu-vm ssh tpu-test --zone=us-central1-f
+gcloud compute tpus tpu-vm ssh tpu-test-0 --zone=us-central1-f
 
 gcloud compute tpus tpu-vm describe tpu-test-0  --zone=us-central1-f
 
@@ -53,6 +50,8 @@ chmod +x ~/miniconda.sh
 ~/miniconda.sh -b -p ~/miniconda
 export PATH="~/miniconda/bin:$PATH"
 conda init bash
+exec bash
 conda env create -f environment.yml
 conda activate diotima
 mkdir ckpts
+python optimize.py
