@@ -221,12 +221,10 @@ def distance(
 
         # Iterate over cfs to find shortest way to bs
         dist_from_cfs = jax.vmap(lambda cf: compute_distances(cf, bs))(cfs)
-        print(dist_from_cfs)
         dist_from_cfs = jnp.mean(dist_from_cfs)
 
         # Iterate over bs to estimate shortest way to cfs
         dist_from_bs = jax.vmap(lambda b: compute_distances(b, cfs))(bs)
-        print(dist_from_bs)
         dist_from_bs = jnp.mean(dist_from_bs)
 
         dist = dist_from_cfs + dist_from_bs

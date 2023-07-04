@@ -12,24 +12,25 @@ for i in {0..0}; do echo "[*] Starting tpu-vm-"$i"..."; \
 for i in {0..0}; do echo "[*] Copying codebase to tpu-vm-"$i"..."; \
                     gcloud compute tpus tpu-vm scp ../environment.yml tpu-test-$i:~/ \
                            --zone=us-central1-f; \
+                    gcloud compute tpus tpu-vm scp ../diotima/ tpu-test-$i:~/diotima \
+                           --zone=us-central1-f \
+                           --recurse; \
+                    gcloud compute tpus tpu-vm scp ../setup.py tpu-test-$i:~/ \
+                           --zone=us-central1-f; \
+                    gcloud compute tpus tpu-vm scp ./optimize.py tpu-test-$i:~/ \
+                           --zone=us-central1-f; \
     done
-
-gcloud compute tpus tpu-vm scp ../diotima/ tpu-test-$i:~/diotima \
-       --zone=us-central1-f \
-       --recurse; \
-    gcloud compute tpus tpu-vm scp ../setup.py tpu-test-$i:~/diotima \
-           --zone=us-central1-f; \
 
 # 3. Run provisioning script on all VMs (w/ local env var).
 
 
-
+p
 # 4. Run optimization script on all VMs (w/ local env var).
 
 # 5. Fetch checkpoints.
 
 # 6. Delete all VMs.
-    for i in {0..0}; do echo "[*] Deleting tpu-vm-"$i"..."; gcloud compute tpus tpu-vm delete tpu-test-$i --zone=us-central1-f; done
+for i in {0..0}; do echo "[*] Deleting tpu-vm-"$i"..."; gcloud compute tpus tpu-vm delete tpu-test-$i --zone=us-central1-f; done
 
 # Scraps
 
