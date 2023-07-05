@@ -137,5 +137,5 @@ def pytrees_equal(tree1, tree2):
 
 def test_distributed(config):
     jax.distributed.initialize(config.infra.coordinator_address,
-                               config.infra.num_hosts,
-                               config.infra.process_id)
+                               int(config.infra.num_hosts),
+                               int(config.infra.process_id))

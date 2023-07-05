@@ -6,6 +6,8 @@ tests/ckpts/*
 tests/params.safetensors
 tests/state.safetensors
 *.pickle
+*.key
+scripts/wandb/*
 
 
 # Byte-compiled / optimized / DLL files

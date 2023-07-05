@@ -10,6 +10,7 @@ from jax import Array
 import haiku as hk
 import optax
 from jaxline import experiment
+from jax.experimental.host_callback import id_tap, id_print
 
 from einops import repeat, rearrange, reduce
 from typing import Tuple, NamedTuple
@@ -17,6 +18,7 @@ from ml_collections.config_dict import ConfigDict
 from safejax.haiku import serialize
 from pathlib import Path
 import os
+import wandb
 
 
 OptState = Tuple[optax.TraceState,
@@ -251,7 +253,10 @@ def backward(
         config: ConfigDict,
         epoch: Array
 ):
-    grads = jax.grad(loss)(params, state, opt_state, forward, data, config)
+    value, grads = jax.value_and_grad(loss)(params, state, opt_state, forward, data, config)
+
+    cond_log(config, {"optimize_perceiver_loss": value})
+
     def agg_grads(grad): return jax.lax.pmean(grads, axis_name="devices")
     def no_agg_grads(grad): return grad
     grads = jax.lax.cond(
@@ -299,9 +304,16 @@ def optimize_perceiver(
 
 
 def optimize_universe_config(config: ConfigDict):
+    wandb.init(
+        project="diotima",
+        config=sanitize_config(default_config()),
+        group="tpu-cluster"
+    )
+    log = config.infra.log
+
     def universe_config_state_to_config(universe_config_state):
         physics_config, elem_distrib = universe_config_state
-        return default_config(physics_config, elem_distrib)
+        return default_config(physics_config, elem_distrib, log)
 
     def compute_param_count(universe_config_state):
         config = universe_config_state_to_config(universe_config_state)
@@ -316,6 +328,9 @@ def optimize_universe_config(config: ConfigDict):
         universe_config_state, opt_state = state
         param_count, grads = jax.value_and_grad(
             compute_param_count)(universe_config_state)
+
+        cond_log(config, {"optimize_universe_config_loss": param_count})
+
         grads = jax.lax.pmean(grads, axis_name="hosts")
         updates, opt_state = optim.update(
             grads, opt_state, universe_config_state)
@@ -353,12 +368,13 @@ def checkpoint(
     serialize(state, filename=root / "state.safetensors")
 
 
-def default_config(physics_config=None, elem_distrib=None):
+def default_config(physics_config=None, elem_distrib=None, log=False):
     config = {
         "infra": {
             "coordinator_address": os.environ.get("JAX_COORD_ADDR", "127.0.0.1:8888"),
             "num_hosts": os.environ.get("JAX_NUM_HOSTS", 1),
-            "process_id": os.environ.get("JAX_PROCESS_ID", 0)
+            "process_id": os.environ.get("JAX_PROCESS_ID", 0),
+            "log": log
         },
         "optimize_perceiver": {
             "epochs": 2,
@@ -417,3 +433,23 @@ def default_config(physics_config=None, elem_distrib=None):
     }
 
     return ConfigDict(config)
+
+
+def cond_log(config: ConfigDict, payload):
+    def log_wrapper(payload, transforms):
+        wandb.log(payload)
+
+    def tap_payload(payload):
+        id_tap(log_wrapper, payload)
+        return None
+
+    id_print(config.infra.log)
+    id_print(payload)
+    jax.lax.cond(config.infra.log, lambda: tap_payload(payload), lambda: None)
+
+
+def sanitize_config(config: ConfigDict):
+    config.data.universe_config.elem_distrib = None
+    config.data.universe_config.physics_config = None
+    config.rng = None
+    return config.to_dict()
