@@ -255,6 +255,7 @@ def backward(
 ):
     value, grads = jax.value_and_grad(loss)(params, state, opt_state, forward, data, config)
 
+    # TODO: Figure why value is null.
     cond_log(config, {"optimize_perceiver_loss": value})
 
     def agg_grads(grad): return jax.lax.pmean(grads, axis_name="devices")
@@ -377,7 +378,7 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "log": log
         },
         "optimize_perceiver": {
-            "epochs": 2,
+            "epochs": 3,
             "branches": 2,
             "agg_every": 2,
             "lr": 1e-4,
@@ -443,8 +444,6 @@ def cond_log(config: ConfigDict, payload):
         id_tap(log_wrapper, payload)
         return None
 
-    id_print(config.infra.log)
-    id_print(payload)
     jax.lax.cond(config.infra.log, lambda: tap_payload(payload), lambda: None)
 
 
