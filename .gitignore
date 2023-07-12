@@ -8,6 +8,7 @@ tests/state.safetensors
 *.pickle
 *.key
 scripts/wandb/*
+tests/wandb/*
 
 
 # Byte-compiled / optimized / DLL files

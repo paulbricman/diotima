@@ -10,12 +10,11 @@ from jax import Array
 import haiku as hk
 import optax
 from jaxline import experiment
-from jax.experimental.host_callback import id_tap, id_print
+from jax.experimental.host_callback import id_tap, id_print, call
 
 from einops import repeat, rearrange, reduce
-from typing import Tuple, NamedTuple
-from ml_collections.config_dict import ConfigDict
-from safejax.haiku import serialize
+from typing import Tuple, NamedTuple, Dict
+from safetensors.flax import save_file
 from pathlib import Path
 import os
 import wandb
@@ -40,16 +39,16 @@ class Agents(NamedTuple):
     substrates: Array
 
 
-def synth_universe_data(config: ConfigDict):
-    universe_config = UniverseConfig(**config.data.universe_config)
-    universe = seed(universe_config, next(config.rng))
-    universe = run(universe, config.data.steps)
+def synth_universe_data(config: Dict):
+    universe_config = UniverseConfig(**config["data"]["universe_config"])
+    universe = seed(universe_config, next(config["rng"]))
+    universe = run(universe, config["data"]["steps"])
 
     cfs = spawn_counterfactuals(
         universe,
-        config.data.start,
-        config.data.n_cfs,
-        next(config.rng)
+        config["data"]["start"],
+        config["data"]["n_cfs"],
+        next(config["rng"])
     )
 
     def cf_to_datum(cf): return Data(
@@ -57,38 +56,38 @@ def synth_universe_data(config: ConfigDict):
         atom_elems=None,
         idx_history=None,
         locs_history=None,
-        locs_future=cf.locs_history[config.data.start:],
+        locs_future=cf.locs_history[config["data"]["start"]:],
         pred_locs_future=None,
     )
 
     data = jax.vmap(cf_to_datum)(cfs)
     data = data._replace(universe_config=universe.universe_config)
     data = data._replace(atom_elems=universe.atom_elems)
-    data = data._replace(idx_history=jnp.arange(config.data.start))
+    data = data._replace(idx_history=jnp.arange(config["data"]["start"]))
     data = data._replace(
-        locs_history=universe.locs_history[:config.data.start])
+        locs_history=universe.locs_history[:config["data"]["start"]])
 
     return data
 
 
-def synth_data(config: ConfigDict):
+def synth_data(config: Dict):
     def pure_synth_universe_data(_): return synth_universe_data(config)
-    return jax.vmap(pure_synth_universe_data)(jnp.arange(config.data.n_univs))
+    return jax.vmap(pure_synth_universe_data)(jnp.arange(config["data"]["n_univs"]))
 
 
-def raw_forward(data: Data, config: ConfigDict, is_training: bool):
-    future_steps = config.data.steps - config.data.start
+def raw_forward(data: Data, config: Dict, is_training: bool):
+    future_steps = config["data"]["steps"] - config["data"]["start"]
     n_atoms = data.locs_history.shape[2]
     atom_locs = rearrange(data.locs_history, "u t a l -> t u a l")[-1]
 
-    input = repeat(data.atom_elems, "u a e -> u (t a) e", t=config.data.start)
+    input = repeat(data.atom_elems, "u a e -> u (t a) e", t=config["data"]["start"])
     space_pos = repeat(data.locs_history, "u t a l -> u (t a) l")
     time_pos = repeat(data.idx_history, "u t -> u (t a) 1", a=n_atoms)
     pos = jnp.concatenate((space_pos, time_pos), axis=2)
 
-    preprocessor = DynamicPointCloudPreprocessor(**config.preprocessor)
-    encoder = PerceiverEncoder(**config.encoder)
-    decoder = BasicDecoder(**config.decoder)
+    preprocessor = DynamicPointCloudPreprocessor(**config["preprocessor"])
+    encoder = PerceiverEncoder(**config["encoder"])
+    decoder = BasicDecoder(**config["decoder"])
 
     input, _, input_without_pos = preprocessor(input, pos)
     encoder_query = encoder.latents(input)
@@ -96,16 +95,16 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
     decoder_query_input = repeat(
         data.atom_elems,
         "u a e -> u (b a) e",
-        b=config.optimize_perceiver.branches)
+        b=config["optimize_perceiver"]["branches"])
     decoder_query_space_pos = repeat(
         atom_locs,
         "u a l -> u (b a) l",
-        b=config.optimize_perceiver.branches)
+        b=config["optimize_perceiver"]["branches"])
     decoder_query_branch_pos = repeat(
         jnp.arange(
-            config.optimize_perceiver.branches),
+            config["optimize_perceiver"]["branches"]),
         "b -> u (b a) 1",
-        u=config.data.n_univs,
+        u=config["data"]["n_univs"],
         a=n_atoms)
 
     decoder_query_pos = jnp.concatenate(
@@ -122,7 +121,7 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
 
     one_step_preds = jax.vmap(decode_slot, in_axes=1)(latents)
     agg_one_step_preds = reduce(one_step_preds, "z u a l -> u a l", "sum")
-    flows = rearrange(one_step_preds, "z u (b a) l -> u b z a l", b=config.optimize_perceiver.branches)
+    flows = rearrange(one_step_preds, "z u (b a) l -> u b z a l", b=config["optimize_perceiver"]["branches"])
 
     def preds_to_forecast():
         def inject_one_step(state, _):
@@ -137,7 +136,7 @@ def raw_forward(data: Data, config: ConfigDict, is_training: bool):
         forecast = rearrange(
             forecast[1],
             "t u (b a) l -> u t a b l",
-            b=config.optimize_perceiver.branches)
+            b=config["optimize_perceiver"]["branches"])
         return forecast
 
     forecast = preds_to_forecast()
@@ -180,13 +179,13 @@ def compute_attn_rollouts(scores, repr_self_residual=True):
     return jax.vmap(compute_attn_rollout)(self, cross)
 
 
-def init_opt(config: ConfigDict):
+def init_opt(config: Dict):
     data = synth_data(config)
 
     forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(next(config.rng), data, config, True)
+    params, state = forward.init(next(config["rng"]), data, config, True)
 
-    optim = optax.adam(config.optimize_perceiver.lr)
+    optim = optax.adamw(config["optimize_perceiver"]["lr"], eps_root=1e-10)
     opt_state = optim.init(params)
 
     return params, state, opt_state, optim, forward
@@ -198,15 +197,13 @@ def loss(
         opt_state: OptState,
         forward,
         data: Data,
-        config: ConfigDict
+        config: Dict
 ):
-    out, state = forward.apply(params, state, next(
-        config.rng), data, config, is_training=True)
+    out, new_state = forward.apply(params, state, next(config["rng"]), data, config, is_training=True)
     data, agents = out
     error = distance(data.pred_locs_future, data.locs_future)
-    l2_penalty = compute_l2_penalty(params) * config.optimize_perceiver.regularization_weight
-    error += l2_penalty
-    return error
+    cond_log(config, {"optimize_perceiver_loss": error})
+    return error, new_state
 
 
 def distance(
@@ -238,7 +235,6 @@ def distance(
 
 
 def compute_l2_penalty(params):
-    # TODO: Specialize L2 regularization to specific branches of param pytree.
     theta, unravel = jax.flatten_util.ravel_pytree(params)
     return jnp.sum(theta ** 2)
 
@@ -250,18 +246,15 @@ def backward(
         forward,
         optimizer,
         data: Data,
-        config: ConfigDict,
+        config: Dict,
         epoch: Array
 ):
-    value, grads = jax.value_and_grad(loss)(params, state, opt_state, forward, data, config)
-
-    # TODO: Figure why value is null.
-    cond_log(config, {"optimize_perceiver_loss": value})
+    grads, new_state = jax.grad(loss, has_aux=True)(params, state, opt_state, forward, data, config)
 
     def agg_grads(grad): return jax.lax.pmean(grads, axis_name="devices")
     def no_agg_grads(grad): return grad
     grads = jax.lax.cond(
-        epoch % config.optimize_perceiver.agg_every == 0,
+        epoch % config["optimize_perceiver"]["agg_every"] == 0,
         agg_grads,
         no_agg_grads,
         grads
@@ -270,47 +263,53 @@ def backward(
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
 
-    return params, state, opt_state
+    return params, new_state, opt_state
 
 
 def optimize_perceiver(
-        config: ConfigDict,
-        params: hk.Params,
-        state: hk.State,
-        opt_state: OptState,
-        optim,
+        config: Dict,
+        perceiver_params: hk.Params,
+        perceiver_state: hk.State,
+        perceiver_opt_state: OptState,
+        perceiver_optim,
         forward
 ):
-    def scanned_backward(state, _):
+    def scanned_backward(opt_perceiver_state, _):
         data = synth_data(config)
-        params, state, opt_state, epoch = state
+        params, state, opt_state, epoch = opt_perceiver_state
         new_params, new_state, new_opt_state = backward(
-            params, state, opt_state, forward, optim, data, config, epoch)
+            params, state, opt_state, forward, perceiver_optim, data, config, epoch)
 
-        checkpoint(params, state, ".")
-        state = new_params, new_state, new_opt_state, epoch + 1
-        return state, state
+        cond_checkpoint(config, epoch, new_params, new_state)
 
-    def scan_backward(_): return jax.lax.scan(
-        scanned_backward,
-        (params,
-         state,
-         opt_state,
-         0),
-        None,
-        config.optimize_perceiver.epochs)
+        opt_perceiver_state = new_params, new_state, new_opt_state, epoch + 1
+        return opt_perceiver_state, opt_perceiver_state
 
-    return jax.pmap(scan_backward, axis_name="devices")(
-        jnp.arange(jax.local_device_count()))
+    def scan_backward(_):
+        init_opt_perceiver_state = (perceiver_params, perceiver_state, perceiver_opt_state, 0)
+        # Weirdest bug ever:
+        # Jitting without scanning works here, so does scanning with jit disabled.
+        # Yet scanning with jit enabled fails.
+        # Solution? Jit in advance, scan with locally disabled jit.
+        jitted_scanned_backwards = jax.jit(scanned_backward)
+        with jax.disable_jit():
+            carry = jax.lax.scan(
+                jitted_scanned_backwards,
+                init_opt_perceiver_state,
+                None,
+                config["optimize_perceiver"]["epochs"]
+            )[0]
+        return carry
+    return jax.pmap(scan_backward, axis_name="devices")(jnp.arange(jax.local_device_count()))
 
 
-def optimize_universe_config(config: ConfigDict):
+def optimize_universe_config(config: Dict):
     wandb.init(
         project="diotima",
         config=sanitize_config(default_config()),
         group="tpu-cluster"
     )
-    log = config.infra.log
+    log = config["infra"]["log"]
 
     def universe_config_state_to_config(universe_config_state):
         physics_config, elem_distrib = universe_config_state
@@ -319,41 +318,47 @@ def optimize_universe_config(config: ConfigDict):
     def compute_param_count(universe_config_state):
         config = universe_config_state_to_config(universe_config_state)
 
-        params, state, opt_state, optim, forward = init_opt(config)
-        state, history = optimize_perceiver(
-            config, params, state, opt_state, optim, forward)
-        params, state, opt_state, epoch = state
+        params, perceiver_state, perceiver_opt_state, perceiver_optim, forward = init_opt(config)
+
+        opt_perceiver_carry = optimize_perceiver(
+            config, params, perceiver_state, perceiver_opt_state, perceiver_optim, forward)
+        params, perceiver_state, perceiver_opt_state, epoch = opt_perceiver_carry
         return compute_l2_penalty(params)
 
-    def scanned_optimize_universe_config(state, _):
-        universe_config_state, opt_state = state
-        param_count, grads = jax.value_and_grad(
-            compute_param_count)(universe_config_state)
+    def scan_optimize_universe_config(_):
+        def init():
+            universe_config_state = (config["data"]["universe_config"]["physics_config"],
+                                 config["data"]["universe_config"]["elem_distrib"])
+            universe_config_optim = optax.adamw(config["optimize_universe_config"]["lr"], eps_root=1e-10)
+            universe_config_opt_state = universe_config_optim.init(universe_config_state)
+            return universe_config_state, universe_config_opt_state, universe_config_optim
 
-        cond_log(config, {"optimize_universe_config_loss": param_count})
+        universe_config_state, universe_config_opt_state, universe_config_optim = init()
 
-        grads = jax.lax.pmean(grads, axis_name="hosts")
-        updates, opt_state = optim.update(
-            grads, opt_state, universe_config_state)
-        universe_config_state = optax.apply_updates(
-            universe_config_state, updates)
-        state = universe_config_state, opt_state
+        def scanned_optimize_universe_config(opt_universe_config_state, _):
+            universe_config_state, universe_config_opt_state = opt_universe_config_state
+            param_count, grads = jax.value_and_grad(compute_param_count)(universe_config_state)
+            cond_log(config, {"optimize_universe_config_loss": param_count})
 
-        return state, state
+            grads = jax.lax.pmean(grads, axis_name="hosts")
+            updates, universe_config_opt_state = universe_config_optim.update(
+                grads, universe_config_opt_state, universe_config_state)
+            universe_config_state = optax.apply_updates(
+                universe_config_state, updates)
+            opt_universe_config_state = universe_config_state, universe_config_opt_state
 
-    universe_config_state = (config.data.universe_config.physics_config,
-                             config.data.universe_config.elem_distrib)
-    optim = optax.adam(config.optimize_universe_config.lr)
-    opt_state = optim.init(universe_config_state)
+            return opt_universe_config_state, opt_universe_config_state
 
-    state, history = jax.pmap(lambda _: jax.lax.scan(scanned_optimize_universe_config,
-                                                     (universe_config_state,
-                                                      opt_state),
-                                                     None,
-                                                     config.optimize_universe_config.epochs),
-                              axis_name="hosts")(jnp.arange(config.infra.num_hosts))
+        return jax.lax.scan(scanned_optimize_universe_config,
+                            (universe_config_state,
+                             universe_config_opt_state),
+                            None,
+                            config["optimize_universe_config"]["epochs"])
 
-    universe_config_state, opt_state = state
+    opt_universe_config_carry, history = jax.pmap(scan_optimize_universe_config,
+                                                  axis_name="hosts")(jnp.arange(config["infra"]["num_hosts"]))
+
+    universe_config_state, opt_state = opt_universe_config_carry
     config = universe_config_state_to_config(universe_config_state)
     return config
 
@@ -361,12 +366,46 @@ def optimize_universe_config(config: ConfigDict):
 def checkpoint(
         params: hk.Params,
         state: hk.State,
-        filepath: str
+        filepath: str = "."
 ):
     root = Path(filepath)
 
-    serialize(params, filename=root / "params.safetensors")
-    serialize(state, filename=root / "state.safetensors")
+    save_file(params, filename=root / "params.safetensors")
+    save_file(state, filename=root / "state.safetensors")
+
+
+def cond_log(config: Dict, payload):
+    def log_wrapper(payload, transforms):
+        wandb.log(payload)
+
+    def tap_payload(payload):
+        id_tap(log_wrapper, payload)
+        return None
+
+    jax.lax.cond(config["infra"]["log"], lambda: tap_payload(payload), lambda: None)
+
+
+def cond_checkpoint(config: Dict, epoch, params, state):
+    def tap_checkpoint(params, state):
+        id_tap(lambda args, transforms: checkpoint(**args), {
+            "params": params,
+            "state": state
+        })
+        return None
+
+    jax.lax.cond((epoch % config["optimize_perceiver"]["ckpt_every"] == 0 and epoch > 0), lambda: tap_checkpoint(params, state), lambda: None)
+
+
+def jit_print(payload):
+    call(lambda _: print("(*) ", end=""), None)
+    id_print(payload)
+
+
+def sanitize_config(config: Dict):
+    config["data"]["universe_config"]["elem_distrib"] = None
+    config["data"]["universe_config"]["physics_config"] = None
+    config["rng"] = None
+    return config
 
 
 def default_config(physics_config=None, elem_distrib=None, log=False):
@@ -378,20 +417,22 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "log": log
         },
         "optimize_perceiver": {
-            "epochs": 3,
+            "epochs": 2,
             "branches": 2,
             "agg_every": 2,
+            "ckpt_every": 2,
             "lr": 1e-4,
-            "regularization_weight": 1e-4
+            "weight_decay": 1e-6
         },
         "optimize_universe_config": {
             "epochs": 2,
-            "lr": 1e-4
+            "lr": 1e-2,
+            "weight_decay": 1e-6
         },
         "data": {
-            "n_univs": 3,
+            "n_univs": 2,
             "steps": 6,
-            "n_cfs": 5,
+            "n_cfs": 4,
             "start": 4,
             "universe_config": {
                 "n_elems": 2,
@@ -407,21 +448,21 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "fourier_position_encoding_kwargs": {
                 "num_bands": 1,
                 "max_resolution": [1],
-                "sine_only": True,
-                "concat_pos": False
+                "sine_only": False,
+                "concat_pos": True
             }
         },
         "encoder": {
-            "z_index_dim": 7,
+            "z_index_dim": 4,
             "num_z_channels": 4,
             "num_cross_attend_heads": 1,
             "num_blocks": 1,
             "num_self_attends_per_block": 2,
-            "num_self_attend_heads": 1
+            "num_self_attend_heads": 2
         },
         "decoder": {
             "output_num_channels": 2,  # Has to match n_dims
-            "num_z_channels": 8,
+            "num_z_channels": 4,
             "use_query_residual": False,
             "position_encoding_type": "fourier",
             "fourier_position_encoding_kwargs": {
@@ -433,22 +474,4 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
         }
     }
 
-    return ConfigDict(config)
-
-
-def cond_log(config: ConfigDict, payload):
-    def log_wrapper(payload, transforms):
-        wandb.log(payload)
-
-    def tap_payload(payload):
-        id_tap(log_wrapper, payload)
-        return None
-
-    jax.lax.cond(config.infra.log, lambda: tap_payload(payload), lambda: None)
-
-
-def sanitize_config(config: ConfigDict):
-    config.data.universe_config.elem_distrib = None
-    config.data.universe_config.physics_config = None
-    config.rng = None
-    return config.to_dict()
+    return config

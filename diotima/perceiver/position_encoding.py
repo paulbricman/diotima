@@ -20,6 +20,7 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.experimental.host_callback import call, id_print
 
 
 def generate_fourier_features(
@@ -116,6 +117,7 @@ class TrainablePositionEncoding(AbstractPositionEncoding):
 
     def __call__(self, batch_size, pos=None):
         del pos  # Unused.
+
         pos_embs = hk.get_parameter(
             'pos_embs', [self._index_dim, self._num_channels],
             init=hk.initializers.TruncatedNormal(stddev=self._init_scale))
