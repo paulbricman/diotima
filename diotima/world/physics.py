@@ -24,6 +24,8 @@ class PhysicsConfig(NamedTuple):
 
 
 def default_physics_config(n_elems: int):
+    # Note: Dummy params which are identical for each elem yield null gradients if optimized.
+    # In other words, changing atom composition has no effect if elems have same properties.
     return PhysicsConfig(
         jnp.tile(4.0, (n_elems)),
         jnp.tile(1.0, (n_elems)),

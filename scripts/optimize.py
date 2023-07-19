@@ -2,6 +2,8 @@ from diotima.perceiver.optimize import optimize_universe_config, default_config,
 from diotima.world.physics import default_elem_distrib, default_physics_config
 
 import jax
+import jax.numpy as jnp
+from jax.sharding import Mesh
 
 import pickle
 
@@ -17,7 +19,9 @@ jax.distributed.initialize(config["infra"]["coordinator_address"],
                            int(config["infra"]["process_id"]))
 
 print("[*] Initializing optimization...")
-config = optimize_universe_config(config)
+mesh_devices = jnp.array(jax.devices()).reshape((2, 4))
+with Mesh(*(mesh_devices, ('hosts', 'devices'))):
+    config = optimize_universe_config(config)
 
 print("[*] Saving final config...")
 pickle.dump(config, open("./config.pickle", "wb+"))

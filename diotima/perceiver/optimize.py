@@ -203,7 +203,7 @@ def loss(
     data, agents = out
     error = distance(data.pred_locs_future, data.locs_future)
     cond_log(config, {"optimize_perceiver_loss": error})
-    return error, new_state
+    return -error, new_state
 
 
 def distance(
@@ -251,8 +251,12 @@ def backward(
 ):
     grads, new_state = jax.grad(loss, has_aux=True)(params, state, opt_state, forward, data, config)
 
-    def agg_grads(grad): return jax.lax.pmean(grads, axis_name="devices")
-    def no_agg_grads(grad): return grad
+    def agg_grads(grad):
+        return jax.lax.pmean(grad, axis_name="devices")
+
+    def no_agg_grads(grad):
+        return grad
+
     grads = jax.lax.cond(
         epoch % config["optimize_perceiver"]["agg_every"] == 0,
         agg_grads,
@@ -304,11 +308,11 @@ def optimize_perceiver(
 
 
 def optimize_universe_config(config: Dict):
-    wandb.init(
-        project="diotima",
-        config=sanitize_config(default_config()),
-        group="tpu-cluster"
-    )
+    # wandb.init(
+    #     project="diotima",
+    #     config=sanitize_config(default_config()),
+    #     group="tpu-cluster"
+    # )
     log = config["infra"]["log"]
 
     def universe_config_state_to_config(universe_config_state):
@@ -323,7 +327,7 @@ def optimize_universe_config(config: Dict):
         opt_perceiver_carry = optimize_perceiver(
             config, params, perceiver_state, perceiver_opt_state, perceiver_optim, forward)
         params, perceiver_state, perceiver_opt_state, epoch = opt_perceiver_carry
-        return compute_l2_penalty(params)
+        return -compute_l2_penalty(params)
 
     def scan_optimize_universe_config(_):
         def init():
@@ -355,8 +359,10 @@ def optimize_universe_config(config: Dict):
                             None,
                             config["optimize_universe_config"]["epochs"])
 
-    opt_universe_config_carry, history = jax.pmap(scan_optimize_universe_config,
-                                                  axis_name="hosts")(jnp.arange(config["infra"]["num_hosts"]))
+    opt_universe_config_carry, history = jax.experimental.maps.xmap(scan_optimize_universe_config,
+                                                                    in_axes=["hosts", ...],
+                                                                    out_axes=["hosts", ...])(jnp.arange(config["infra"]["num_hosts"]))
+    # opt_universe_config_carry, history = jax.pmap(scan_optimize_universe_config, axis_name="hosts")(jnp.arange(config["infra"]["num_hosts"]))
 
     universe_config_state, opt_state = opt_universe_config_carry
     config = universe_config_state_to_config(universe_config_state)
@@ -422,12 +428,12 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "agg_every": 2,
             "ckpt_every": 2,
             "lr": 1e-4,
-            "weight_decay": 1e-6
+            "weight_decay": 1e-8
         },
         "optimize_universe_config": {
             "epochs": 2,
-            "lr": 1e-2,
-            "weight_decay": 1e-6
+            "lr": 1e-4,
+            "weight_decay": 1e-8
         },
         "data": {
             "n_univs": 2,

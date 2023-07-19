@@ -57,3 +57,5 @@ for i in {0..1}; do echo "[*] Running master script on tpu-vm-"$i"..."; \
                            --zone=us-central1-f \
                            --command="rm -rf ./*" & \
     done
+
+# pip install --upgrgade jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_releases.html

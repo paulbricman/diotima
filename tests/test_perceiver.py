@@ -107,9 +107,6 @@ def test_optimize_universe_config(config):
     assert not pytrees_equal(
         config["data"]["universe_config"]["physics_config"],
         new_config["data"]["universe_config"]["physics_config"])
-    assert not pytrees_equal(
-        config["data"]["universe_config"]["elem_distrib"],
-        new_config["data"]["universe_config"]["elem_distrib"])
 
 
 def pytrees_equal(tree1, tree2):
@@ -132,8 +129,3 @@ def test_minimal_nested():
         return jax.lax.scan(lambda y, _: [inner_loop(y)] * 2, x, None, 3)[0]
 
     assert outer_loop(0) == 6
-
-
-# TODO: Implement to_json_best_effort()
-def test_persist_config(config):
-    pass
