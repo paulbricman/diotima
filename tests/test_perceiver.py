@@ -42,10 +42,10 @@ def test_synth_data(config):
 
 def test_raw_forward(config):
     data = synth_data(config)
-    params, state, opt_state, optim, forward = init_opt(config)
+    params, opt_state, optim, forward = init_opt(config)
 
-    out, state = forward.apply(
-        params, state, next(config["rng"]), data, config, True)
+    out = forward.apply(
+        params, next(config["rng"]), data, config, True)
     data, agents = out
 
     assert data.pred_locs_future.shape == (
@@ -87,18 +87,18 @@ def test_distance():
 
 def test_loss(config):
     data = synth_data(config)
-    params, state, opt_state, optim, forward = init_opt(config)
-    error, new_state = loss(params, state, opt_state, forward, data, config)
+    params, opt_state, optim, forward = init_opt(config)
+    error = loss(params, opt_state, forward, data, config)
 
     assert error.size == 1
 
 
 def test_optimize_perceiver(config):
-    params, state, opt_state, optim, forward = init_opt(config)
+    params, opt_state, optim, forward = init_opt(config)
 
-    state = optimize_perceiver(
-        config, params, state, opt_state, optim, forward)
-    params, state, opt_state, epoch = state
+    carry, history = optimize_perceiver(
+        config, params, opt_state, optim, forward)
+    params, opt_state, epoch, perceiver_loss = carry
     assert epoch == config["optimize_perceiver"]["epochs"]
 
 

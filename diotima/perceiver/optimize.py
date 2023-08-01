@@ -10,7 +10,8 @@ from jax import Array
 import haiku as hk
 import optax
 from jaxline import experiment
-from jax.experimental.host_callback import id_tap, id_print, call
+from jax.experimental.host_callback import id_print, call
+from jax.experimental import io_callback
 
 from einops import repeat, rearrange, reduce
 from typing import Tuple, NamedTuple, Dict
@@ -182,28 +183,27 @@ def compute_attn_rollouts(scores, repr_self_residual=True):
 def init_opt(config: Dict):
     data = synth_data(config)
 
-    forward = hk.transform_with_state(raw_forward)
-    params, state = forward.init(next(config["rng"]), data, config, True)
+    forward = hk.transform(raw_forward)
+    params = forward.init(next(config["rng"]), data, config, True)
 
     optim = optax.adamw(config["optimize_perceiver"]["lr"], eps_root=1e-10)
     opt_state = optim.init(params)
 
-    return params, state, opt_state, optim, forward
+    return params, opt_state, optim, forward
 
 
 def loss(
         params: hk.Params,
-        state: hk.State,
         opt_state: OptState,
         forward,
         data: Data,
         config: Dict
 ):
-    out, new_state = forward.apply(params, state, next(config["rng"]), data, config, is_training=True)
+    out = forward.apply(params, next(config["rng"]), data, config, is_training=True)
     data, agents = out
     error = distance(data.pred_locs_future, data.locs_future)
-    cond_log(config, {"optimize_perceiver_loss": error})
-    return -error, new_state
+
+    return -error
 
 
 def distance(
@@ -241,7 +241,6 @@ def compute_l2_penalty(params):
 
 def backward(
         params: hk.Params,
-        state: hk.State,
         opt_state: OptState,
         forward,
         optimizer,
@@ -249,7 +248,7 @@ def backward(
         config: Dict,
         epoch: Array
 ):
-    grads, new_state = jax.grad(loss, has_aux=True)(params, state, opt_state, forward, data, config)
+    perceiver_loss, grads = jax.value_and_grad(loss)(params, opt_state, forward, data, config)
 
     def agg_grads(grad):
         return jax.lax.pmean(grad, axis_name="devices")
@@ -267,52 +266,45 @@ def backward(
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
 
-    return params, new_state, opt_state
+    return params, opt_state, perceiver_loss
 
 
 def optimize_perceiver(
         config: Dict,
         perceiver_params: hk.Params,
-        perceiver_state: hk.State,
         perceiver_opt_state: OptState,
         perceiver_optim,
         forward
 ):
     def scanned_backward(opt_perceiver_state, _):
         data = synth_data(config)
-        params, state, opt_state, epoch = opt_perceiver_state
-        new_params, new_state, new_opt_state = backward(
-            params, state, opt_state, forward, perceiver_optim, data, config, epoch)
+        params, opt_state, opt_perceiver_epoch, _ = opt_perceiver_state
+        params, opt_state, perceiver_loss = backward(
+            params, opt_state, forward, perceiver_optim, data, config, opt_perceiver_epoch)
 
-        cond_checkpoint(config, epoch, new_params, new_state)
-
-        opt_perceiver_state = new_params, new_state, new_opt_state, epoch + 1
+        opt_perceiver_state = params, opt_state, opt_perceiver_epoch + 1, perceiver_loss
         return opt_perceiver_state, opt_perceiver_state
 
     def scan_backward(_):
-        init_opt_perceiver_state = (perceiver_params, perceiver_state, perceiver_opt_state, 0)
+        init_opt_perceiver_state = (perceiver_params, perceiver_opt_state, 0, None)
+
         # Weirdest bug ever:
         # Jitting without scanning works here, so does scanning with jit disabled.
         # Yet scanning with jit enabled fails.
         # Solution? Jit in advance, scan with locally disabled jit.
         jitted_scanned_backwards = jax.jit(scanned_backward)
         with jax.disable_jit():
-            carry = jax.lax.scan(
+            carry, history = jax.lax.scan(
                 jitted_scanned_backwards,
                 init_opt_perceiver_state,
                 None,
                 config["optimize_perceiver"]["epochs"]
-            )[0]
-        return carry
+            )
+        return carry, history
     return jax.pmap(scan_backward, axis_name="devices")(jnp.arange(jax.local_device_count()))
 
 
 def optimize_universe_config(config: Dict):
-    # wandb.init(
-    #     project="diotima",
-    #     config=sanitize_config(default_config()),
-    #     group="tpu-cluster"
-    # )
     log = config["infra"]["log"]
 
     def universe_config_state_to_config(universe_config_state):
@@ -322,12 +314,13 @@ def optimize_universe_config(config: Dict):
     def compute_param_count(universe_config_state):
         config = universe_config_state_to_config(universe_config_state)
 
-        params, perceiver_state, perceiver_opt_state, perceiver_optim, forward = init_opt(config)
+        params, perceiver_opt_state, perceiver_optim, forward = init_opt(config)
 
-        opt_perceiver_carry = optimize_perceiver(
-            config, params, perceiver_state, perceiver_opt_state, perceiver_optim, forward)
-        params, perceiver_state, perceiver_opt_state, epoch = opt_perceiver_carry
-        return -compute_l2_penalty(params)
+        opt_perceiver_carry, opt_perceiver_history = optimize_perceiver(
+            config, params, perceiver_opt_state, perceiver_optim, forward)
+        params, perceiver_opt_state, epoch, _ = opt_perceiver_carry
+
+        return -compute_l2_penalty(params), (params, opt_perceiver_history[3])
 
     def scan_optimize_universe_config(_):
         def init():
@@ -340,66 +333,86 @@ def optimize_universe_config(config: Dict):
         universe_config_state, universe_config_opt_state, universe_config_optim = init()
 
         def scanned_optimize_universe_config(opt_universe_config_state, _):
-            universe_config_state, universe_config_opt_state = opt_universe_config_state
-            param_count, grads = jax.value_and_grad(compute_param_count)(universe_config_state)
-            cond_log(config, {"optimize_universe_config_loss": param_count})
+            universe_config_state, universe_config_opt_state, opt_universe_epoch, _, _ = opt_universe_config_state
+            value, grads = jax.value_and_grad(compute_param_count, has_aux=True)(universe_config_state)
+            param_count, aux = value
+            params, perceiver_loss_history = aux
 
             grads = jax.lax.pmean(grads, axis_name="hosts")
             updates, universe_config_opt_state = universe_config_optim.update(
                 grads, universe_config_opt_state, universe_config_state)
             universe_config_state = optax.apply_updates(
                 universe_config_state, updates)
-            opt_universe_config_state = universe_config_state, universe_config_opt_state
+            opt_universe_config_state = universe_config_state, universe_config_opt_state, opt_universe_epoch + 1, param_count, perceiver_loss_history
 
             return opt_universe_config_state, opt_universe_config_state
 
         return jax.lax.scan(scanned_optimize_universe_config,
                             (universe_config_state,
-                             universe_config_opt_state),
+                             universe_config_opt_state,
+                             0,
+                             None,
+                             None),
                             None,
                             config["optimize_universe_config"]["epochs"])
 
-    opt_universe_config_carry, history = jax.experimental.maps.xmap(scan_optimize_universe_config,
-                                                                    in_axes=["hosts", ...],
-                                                                    out_axes=["hosts", ...])(jnp.arange(config["infra"]["num_hosts"]))
-    # opt_universe_config_carry, history = jax.pmap(scan_optimize_universe_config, axis_name="hosts")(jnp.arange(config["infra"]["num_hosts"]))
+    opt_universe_config_carry, opt_universe_config_history = jax.experimental.maps.xmap(scan_optimize_universe_config, in_axes=["hosts", ...], out_axes=["hosts", ...])(jnp.arange(config["infra"]["num_hosts"]))
 
-    universe_config_state, opt_state = opt_universe_config_carry
+
+
+    universe_config_state, opt_state, _, _, _ = opt_universe_config_carry
     config = universe_config_state_to_config(universe_config_state)
+
+    _, _, _, param_count, perceiver_loss_history = opt_universe_config_history
+
+    # Good old for loops for non-JIT, non-JVP logging.
+    # Aggregate across hosts and devices.
+    if config["infra"]["log"]:
+        param_count = reduce(param_count, "h ue -> ue", "mean")
+        wandb.log({"optimize_universe_config_loss": param_count})
+        perceiver_loss_history = reduce(perceiver_loss_history, "h ue d pe -> (ue pe)", "mean")
+        wandb.log({"optimize_perceiver_loss": perceiver_loss_history})
+
     return config
 
 
 def checkpoint(
         params: hk.Params,
-        state: hk.State,
         filepath: str = "."
 ):
     root = Path(filepath)
 
     save_file(params, filename=root / "params.safetensors")
-    save_file(state, filename=root / "state.safetensors")
 
 
 def cond_log(config: Dict, payload):
-    def log_wrapper(payload, transforms):
+    placeholder = jnp.array([])
+
+    def wrap_log(payload):
         wandb.log(payload)
+        return placeholder
 
     def tap_payload(payload):
-        id_tap(log_wrapper, payload)
+        jax.experimental.io_callback(wandb.log, placeholder, payload)
         return None
 
     jax.lax.cond(config["infra"]["log"], lambda: tap_payload(payload), lambda: None)
 
 
 def cond_checkpoint(config: Dict, epoch, params, state):
-    def tap_checkpoint(params, state):
-        id_tap(lambda args, transforms: checkpoint(**args), {
-            "params": params,
-            "state": state
-        })
+    placeholder = jnp.array([])
+
+    def wrap_checkpoint(params):
+        checkpoint(params)
+        return placeholder
+
+    def tap_checkpoint(params):
+        jax.experimental.io_callback(wrap_checkpoint, placeholder, params)
         return None
 
-    jax.lax.cond((epoch % config["optimize_perceiver"]["ckpt_every"] == 0 and epoch > 0), lambda: tap_checkpoint(params, state), lambda: None)
+    # TODO: Undo
+    # jax.lax.cond((epoch % config["optimize_perceiver"]["ckpt_every"] == 0 and epoch > 0), lambda: tap_checkpoint(params, state), lambda: None)
+    jax.lax.cond(True, lambda: tap_checkpoint(params, state), lambda: None)
 
 
 def jit_print(payload):
@@ -414,6 +427,12 @@ def sanitize_config(config: Dict):
     return config
 
 
+def sanitize_pytree(state):
+    state, unravel = jax.flatten_util.ravel_pytree(state)
+    state += 1e-3
+    return unravel(state)
+
+
 def default_config(physics_config=None, elem_distrib=None, log=False):
     config = {
         "infra": {
@@ -426,7 +445,7 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "epochs": 2,
             "branches": 2,
             "agg_every": 2,
-            "ckpt_every": 2,
+            "ckpt_every": 1,
             "lr": 1e-4,
             "weight_decay": 1e-8
         },
@@ -464,7 +483,8 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "num_cross_attend_heads": 1,
             "num_blocks": 1,
             "num_self_attends_per_block": 2,
-            "num_self_attend_heads": 2
+            "num_self_attend_heads": 2,
+            "dropout_prob": 0.2
         },
         "decoder": {
             "output_num_channels": 2,  # Has to match n_dims
