@@ -3,7 +3,6 @@ from diotima.world.physics import default_elem_distrib, default_physics_config
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import Mesh
 
 import pickle
 import wandb

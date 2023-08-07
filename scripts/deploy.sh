@@ -19,8 +19,8 @@ for i in {0..0}; do echo "[*] Copying codebase to tpu-vm-"$i"..."; \
                     gcloud compute tpus tpu-vm scp ../diotima/ tpu-test-$i:~/diotima \
                            --zone=us-central1-f \
                            --recurse; \
-                    # gcloud compute tpus tpu-vm scp ./optimize.py tpu-test-$i:~/ \
-                    #        --zone=us-central1-f; \
+                    gcloud compute tpus tpu-vm scp ./optimize.py tpu-test-$i:~/ \
+                           --zone=us-central1-f; \
     done
 
 # 3. Run VMs (w/ local env var).

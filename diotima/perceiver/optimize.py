@@ -10,8 +10,6 @@ from jax import Array
 import haiku as hk
 import optax
 from jaxline import experiment
-from jax.experimental.host_callback import id_print, call
-from jax.experimental import io_callback
 
 from einops import repeat, rearrange, reduce
 from typing import Tuple, NamedTuple, Dict
@@ -351,14 +349,13 @@ def optimize_universe_config(config: Dict):
                             (universe_config_state,
                              universe_config_opt_state,
                              0,
-                             None,
-                             None),
+                             0,
+                             jnp.zeros((config["infra"]["num_devices"], config["optimize_perceiver"]["epochs"]))
+                            ),
                             None,
                             config["optimize_universe_config"]["epochs"])
 
     opt_universe_config_carry, opt_universe_config_history = jax.experimental.maps.xmap(scan_optimize_universe_config, in_axes=["hosts", ...], out_axes=["hosts", ...])(jnp.arange(config["infra"]["num_hosts"]))
-
-
 
     universe_config_state, opt_state, _, _, _ = opt_universe_config_carry
     config = universe_config_state_to_config(universe_config_state)
@@ -439,6 +436,7 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "coordinator_address": os.environ.get("JAX_COORD_ADDR", "127.0.0.1:8888"),
             "num_hosts": os.environ.get("JAX_NUM_HOSTS", 1),
             "process_id": os.environ.get("JAX_PROCESS_ID", 0),
+            "num_devices": jax.local_device_count(),
             "log": log
         },
         "optimize_perceiver": {
