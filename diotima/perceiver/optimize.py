@@ -5,11 +5,11 @@ from diotima.perceiver.perceiver import PerceiverEncoder, BasicDecoder
 
 import jax
 import jax.numpy as jnp
+from jax.experimental.maps import xmap
 from jax._src.prng import PRNGKeyArray
 from jax import Array
 import haiku as hk
 import optax
-from jaxline import experiment
 
 from einops import repeat, rearrange, reduce
 from typing import Tuple, NamedTuple, Dict
@@ -355,7 +355,7 @@ def optimize_universe_config(config: Dict):
                             None,
                             config["optimize_universe_config"]["epochs"])
 
-    opt_universe_config_carry, opt_universe_config_history = jax.experimental.maps.xmap(scan_optimize_universe_config, in_axes=["hosts", ...], out_axes=["hosts", ...])(jnp.arange(config["infra"]["num_hosts"]))
+    opt_universe_config_carry, opt_universe_config_history = xmap(scan_optimize_universe_config, in_axes=["hosts", ...], out_axes=["hosts", ...])(jnp.arange(config["infra"]["num_hosts"]))
 
     universe_config_state, opt_state, _, _, _ = opt_universe_config_carry
     config = universe_config_state_to_config(universe_config_state)
@@ -366,9 +366,12 @@ def optimize_universe_config(config: Dict):
     # Aggregate across hosts and devices.
     if config["infra"]["log"]:
         param_count = reduce(param_count, "h ue -> ue", "mean")
-        wandb.log({"optimize_universe_config_loss": param_count})
+        for epoch in param_count:
+            wandb.log({"optimize_universe_config_param_count": epoch})
+        
         perceiver_loss_history = reduce(perceiver_loss_history, "h ue d pe -> (ue pe)", "mean")
-        wandb.log({"optimize_perceiver_loss": perceiver_loss_history})
+        for epoch in perceiver_loss_history:
+            wandb.log({"optimize_perceiver_loss": epoch})
 
     return config
 
@@ -440,7 +443,7 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "log": log
         },
         "optimize_perceiver": {
-            "epochs": 2,
+            "epochs": 8,
             "branches": 2,
             "agg_every": 2,
             "ckpt_every": 1,
@@ -448,7 +451,7 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "weight_decay": 1e-8
         },
         "optimize_universe_config": {
-            "epochs": 2,
+            "epochs": 8,
             "lr": 1e-4,
             "weight_decay": 1e-8
         },

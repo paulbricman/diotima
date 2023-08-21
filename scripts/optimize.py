@@ -3,7 +3,9 @@ from diotima.world.physics import default_elem_distrib, default_physics_config
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import Mesh
 
+import numpy as np
 import pickle
 import wandb
 
@@ -26,9 +28,9 @@ jax.distributed.initialize(config["infra"]["coordinator_address"],
                            int(config["infra"]["process_id"]))
 
 print("[*] Initializing optimization...")
-# mesh_devices = jnp.array(jax.devices()).reshape((2, 4))
-# with Mesh(*(mesh_devices, ('hosts', 'devices'))):
-config = optimize_universe_config(config)
+mesh_devices = np.array(jax.devices()).reshape((config["infra"]["num_hosts"], config["infra"]["num_devices"]))
+with Mesh(*(mesh_devices, ('hosts', 'devices'))):
+    config = optimize_universe_config(config)
 
 print("[*] Saving final config...")
 pickle.dump(config, open("./config.pickle", "wb+"))

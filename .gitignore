@@ -9,6 +9,7 @@ tests/state.safetensors
 *.key
 scripts/wandb/*
 tests/wandb/*
+condaenv*
 
 
 # Byte-compiled / optimized / DLL files
