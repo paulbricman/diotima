@@ -22,15 +22,16 @@ wandb.init(
     group="tpu-cluster"
 )
 
-print("[*] Initializing distributed job...")
-jax.distributed.initialize(config["infra"]["coordinator_address"],
-                           int(config["infra"]["num_hosts"]),
-                           int(config["infra"]["process_id"]))
+with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
+    print("[*] Initializing distributed job...")
+    jax.distributed.initialize(config["infra"]["coordinator_address"],
+                            int(config["infra"]["num_hosts"]),
+                            int(config["infra"]["process_id"]))
 
-print("[*] Initializing optimization...")
-mesh_devices = np.array(jax.devices()).reshape((config["infra"]["num_hosts"], config["infra"]["num_devices"]))
-with Mesh(*(mesh_devices, ('hosts', 'devices'))):
-    config = optimize_universe_config(config)
+    print("[*] Initializing optimization...")
+    mesh_devices = np.array(jax.devices()).reshape((config["infra"]["num_hosts"], config["infra"]["num_devices"]))
+    with Mesh(*(mesh_devices, ('hosts', 'devices'))):
+        config = optimize_universe_config(config)
 
-print("[*] Saving final config...")
-pickle.dump(config, open("./config.pickle", "wb+"))
+    print("[*] Saving final config...")
+    pickle.dump(config, open("./config.pickle", "wb+"))

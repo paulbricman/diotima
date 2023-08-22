@@ -290,10 +290,9 @@ def optimize_perceiver(
         # Jitting without scanning works here, so does scanning with jit disabled.
         # Yet scanning with jit enabled fails.
         # Solution? Jit in advance, scan with locally disabled jit.
-        jitted_scanned_backwards = jax.jit(scanned_backward)
         with jax.disable_jit():
             carry, history = jax.lax.scan(
-                jitted_scanned_backwards,
+                scanned_backward,
                 init_opt_perceiver_state,
                 None,
                 config["optimize_perceiver"]["epochs"]
@@ -345,15 +344,16 @@ def optimize_universe_config(config: Dict):
 
             return opt_universe_config_state, opt_universe_config_state
 
-        return jax.lax.scan(scanned_optimize_universe_config,
-                            (universe_config_state,
-                             universe_config_opt_state,
-                             0,
-                             0,
-                             jnp.zeros((config["infra"]["num_devices"], config["optimize_perceiver"]["epochs"]))
-                            ),
-                            None,
-                            config["optimize_universe_config"]["epochs"])
+        with jax.disable_jit():
+            return jax.lax.scan(scanned_optimize_universe_config,
+                                (universe_config_state,
+                                universe_config_opt_state,
+                                0,
+                                0,
+                                jnp.zeros((config["infra"]["num_devices"], config["optimize_perceiver"]["epochs"]))
+                                ),
+                                None,
+                                config["optimize_universe_config"]["epochs"])
 
     opt_universe_config_carry, opt_universe_config_history = xmap(scan_optimize_universe_config, in_axes=["hosts", ...], out_axes=["hosts", ...])(jnp.arange(config["infra"]["num_hosts"]))
 
@@ -385,52 +385,11 @@ def checkpoint(
     save_file(params, filename=root / "params.safetensors")
 
 
-def cond_log(config: Dict, payload):
-    placeholder = jnp.array([])
-
-    def wrap_log(payload):
-        wandb.log(payload)
-        return placeholder
-
-    def tap_payload(payload):
-        jax.experimental.io_callback(wandb.log, placeholder, payload)
-        return None
-
-    jax.lax.cond(config["infra"]["log"], lambda: tap_payload(payload), lambda: None)
-
-
-def cond_checkpoint(config: Dict, epoch, params, state):
-    placeholder = jnp.array([])
-
-    def wrap_checkpoint(params):
-        checkpoint(params)
-        return placeholder
-
-    def tap_checkpoint(params):
-        jax.experimental.io_callback(wrap_checkpoint, placeholder, params)
-        return None
-
-    # TODO: Undo
-    # jax.lax.cond((epoch % config["optimize_perceiver"]["ckpt_every"] == 0 and epoch > 0), lambda: tap_checkpoint(params, state), lambda: None)
-    jax.lax.cond(True, lambda: tap_checkpoint(params, state), lambda: None)
-
-
-def jit_print(payload):
-    call(lambda _: print("(*) ", end=""), None)
-    id_print(payload)
-
-
 def sanitize_config(config: Dict):
     config["data"]["universe_config"]["elem_distrib"] = None
     config["data"]["universe_config"]["physics_config"] = None
     config["rng"] = None
     return config
-
-
-def sanitize_pytree(state):
-    state, unravel = jax.flatten_util.ravel_pytree(state)
-    state += 1e-3
-    return unravel(state)
 
 
 def default_config(physics_config=None, elem_distrib=None, log=False):
@@ -451,7 +410,7 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "weight_decay": 1e-8
         },
         "optimize_universe_config": {
-            "epochs": 8,
+            "epochs": 2,
             "lr": 1e-4,
             "weight_decay": 1e-8
         },

@@ -9,18 +9,18 @@ for i in {0..1}; do echo "[*] Starting tpu-vm-"$i"..."; \
     done
 
 # 2. Copy codebase on all VMs.
-for i in {0..0}; do echo "[*] Copying codebase to tpu-vm-"$i"..."; \
+for i in {1..1}; do echo "[*] Copying codebase to tpu-vm-"$i"..."; \
                     # gcloud compute tpus tpu-vm scp ../wandb.key tpu-test-$i:~/ \
                     #        --zone=us-central1-f; \
                     # gcloud compute tpus tpu-vm scp ../setup.py tpu-test-$i:~/ \
                     #        --zone=us-central1-f; \
                     # gcloud compute tpus tpu-vm scp ../environment.yml tpu-test-$i:~/ \
                     #        --zone=us-central1-f; \
-                      gcloud compute tpus tpu-vm scp ../diotima/ tpu-test-$i:~/diotima \
-                             --zone=us-central1-f \
-                             --recurse; \
-              #       gcloud compute tpus tpu-vm scp ./optimize.py tpu-test-$i:~/ \
-              #              --zone=us-central1-f; \
+                    gcloud compute tpus tpu-vm scp ../diotima/ tpu-test-$i:~/diotima \
+                           --zone=us-central1-f \
+                           --recurse; \
+                    gcloud compute tpus tpu-vm scp ./optimize.py tpu-test-$i:~/ \
+                           --zone=us-central1-f; \
     done
 
 # 3. Run VMs (w/ local env var).
