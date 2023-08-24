@@ -455,7 +455,7 @@ class BasicDecoder(AbstractPerceiverDecoder):
 
     def __init__(self,
                  output_num_channels,
-                 position_encoding_type='trainable',
+                 position_encoding_type='fourier',
                  # Ignored if position_encoding_type == 'none':
                  output_index_dims=None,
                  subsampled_index_dims=None,

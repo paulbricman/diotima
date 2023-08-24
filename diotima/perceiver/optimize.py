@@ -290,13 +290,11 @@ def optimize_perceiver(
         # Jitting without scanning works here, so does scanning with jit disabled.
         # Yet scanning with jit enabled fails.
         # Solution? Jit in advance, scan with locally disabled jit.
-        with jax.disable_jit():
-            carry, history = jax.lax.scan(
-                scanned_backward,
-                init_opt_perceiver_state,
-                None,
-                config["optimize_perceiver"]["epochs"]
-            )
+        carry, history = jax.lax.scan(
+            scanned_backward,
+            init_opt_perceiver_state,
+            None,
+            config["optimize_perceiver"]["epochs"])
         return carry, history
     return jax.pmap(scan_backward, axis_name="devices")(jnp.arange(jax.local_device_count()))
 
@@ -329,13 +327,13 @@ def optimize_universe_config(config: Dict):
 
         universe_config_state, universe_config_opt_state, universe_config_optim = init()
 
+        @jax.checkpoint
         def scanned_optimize_universe_config(opt_universe_config_state, _):
             universe_config_state, universe_config_opt_state, opt_universe_epoch, _, _ = opt_universe_config_state
             value, grads = jax.value_and_grad(compute_param_count, has_aux=True)(universe_config_state)
             param_count, aux = value
             params, perceiver_loss_history = aux
 
-            grads = jax.lax.pmean(grads, axis_name="hosts")
             updates, universe_config_opt_state = universe_config_optim.update(
                 grads, universe_config_opt_state, universe_config_state)
             universe_config_state = optax.apply_updates(
@@ -344,18 +342,17 @@ def optimize_universe_config(config: Dict):
 
             return opt_universe_config_state, opt_universe_config_state
 
-        with jax.disable_jit():
-            return jax.lax.scan(scanned_optimize_universe_config,
-                                (universe_config_state,
-                                universe_config_opt_state,
-                                0,
-                                0,
-                                jnp.zeros((config["infra"]["num_devices"], config["optimize_perceiver"]["epochs"]))
-                                ),
-                                None,
-                                config["optimize_universe_config"]["epochs"])
+        return jax.lax.scan(scanned_optimize_universe_config,
+                            (universe_config_state,
+                            universe_config_opt_state,
+                            0,
+                            0,
+                            jnp.zeros((config["infra"]["num_devices"], config["optimize_perceiver"]["epochs"]))
+                            ),
+                            None,
+                            config["optimize_universe_config"]["epochs"])
 
-    opt_universe_config_carry, opt_universe_config_history = xmap(scan_optimize_universe_config, in_axes=["hosts", ...], out_axes=["hosts", ...])(jnp.arange(config["infra"]["num_hosts"]))
+    opt_universe_config_carry, opt_universe_config_history = scan_optimize_universe_config(None)
 
     universe_config_state, opt_state, _, _, _ = opt_universe_config_carry
     config = universe_config_state_to_config(universe_config_state)
@@ -365,11 +362,11 @@ def optimize_universe_config(config: Dict):
     # Good old for loops for non-JIT, non-JVP logging.
     # Aggregate across hosts and devices.
     if config["infra"]["log"]:
-        param_count = reduce(param_count, "h ue -> ue", "mean")
+        # param_count = reduce(param_count, "h ue -> ue", "mean")
         for epoch in param_count:
             wandb.log({"optimize_universe_config_param_count": epoch})
         
-        perceiver_loss_history = reduce(perceiver_loss_history, "h ue d pe -> (ue pe)", "mean")
+        perceiver_loss_history = reduce(perceiver_loss_history, "ue d pe -> (ue pe)", "mean")
         for epoch in perceiver_loss_history:
             wandb.log({"optimize_perceiver_loss": epoch})
 
@@ -402,7 +399,7 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "log": log
         },
         "optimize_perceiver": {
-            "epochs": 8,
+            "epochs": 1,
             "branches": 2,
             "agg_every": 2,
             "ckpt_every": 1,
@@ -410,7 +407,7 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "weight_decay": 1e-8
         },
         "optimize_universe_config": {
-            "epochs": 2,
+            "epochs": 1,
             "lr": 1e-4,
             "weight_decay": 1e-8
         },
