@@ -153,7 +153,7 @@ dependencies:
     - contextlib2
     - decorator
     - dill
-    - dm-haiku
+    - dm-haiku==0.0.10
     - dm-tree
     - docker-pycreds
     - einops
@@ -174,9 +174,9 @@ dependencies:
     - imageio
     - immutabledict
     - importlib-resources
-    - jax
-    - jaxlib
-    - jaxline
+    - jax==0.4.14
+    - jaxlib==0.4.14
+    - jaxline==0.0.5
     - jmp
     - joblib
     - keras

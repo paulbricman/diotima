@@ -284,7 +284,7 @@ def optimize_perceiver(
         return opt_perceiver_state, opt_perceiver_state
 
     def scan_backward(_):
-        init_opt_perceiver_state = (perceiver_params, perceiver_opt_state, 0, None)
+        init_opt_perceiver_state = (perceiver_params, perceiver_opt_state, 0, 0)
 
         # Weirdest bug ever:
         # Jitting without scanning works here, so does scanning with jit disabled.
@@ -361,14 +361,14 @@ def optimize_universe_config(config: Dict):
 
     # Good old for loops for non-JIT, non-JVP logging.
     # Aggregate across hosts and devices.
-    if config["infra"]["log"]:
+    if config["infra"]["log"] and jax.process_index() == 0:
         # param_count = reduce(param_count, "h ue -> ue", "mean")
-        for epoch in param_count:
-            wandb.log({"optimize_universe_config_param_count": epoch})
+        for idx, epoch in enumerate(param_count):
+            wandb.log({"optimize_universe_config_param_count": epoch}, step=idx)
         
         perceiver_loss_history = reduce(perceiver_loss_history, "ue d pe -> (ue pe)", "mean")
-        for epoch in perceiver_loss_history:
-            wandb.log({"optimize_perceiver_loss": epoch})
+        for idx, epoch in enumerate(perceiver_loss_history):
+            wandb.log({"optimize_perceiver_loss": epoch}, step=idx)
 
     return config
 
@@ -399,16 +399,16 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "log": log
         },
         "optimize_perceiver": {
-            "epochs": 1,
+            "epochs": 4,
             "branches": 2,
             "agg_every": 2,
             "ckpt_every": 1,
-            "lr": 1e-4,
+            "lr": 1e-3,
             "weight_decay": 1e-8
         },
         "optimize_universe_config": {
-            "epochs": 1,
-            "lr": 1e-4,
+            "epochs": 8,
+            "lr": 1e-3,
             "weight_decay": 1e-8
         },
         "data": {

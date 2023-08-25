@@ -1,61 +1,68 @@
 #!/bin/bash
 
-# 1. Create TPU VMs.
-for i in {0..1}; do echo "[*] Starting tpu-vm-"$i"..."; \
-                    gcloud compute tpus tpu-vm create tpu-test-$i \
-                           --zone=us-central1-f \
-                           --accelerator-type=v2-8 \
-                           --version=tpu-ubuntu2204-base; \
-    done
-
-# 2. Copy codebase on all VMs.
-for i in {1..1}; do echo "[*] Copying codebase to tpu-vm-"$i"..."; \
-                    # gcloud compute tpus tpu-vm scp ../wandb.key tpu-test-$i:~/ \
-                    #        --zone=us-central1-f; \
-                    # gcloud compute tpus tpu-vm scp ../setup.py tpu-test-$i:~/ \
-                    #        --zone=us-central1-f; \
-                    # gcloud compute tpus tpu-vm scp ../environment.yml tpu-test-$i:~/ \
-                    #        --zone=us-central1-f; \
+# Copy codebase on all VMs.
+for i in {0..0}; do echo "[*] Copying codebase to tpu-vm-"$i"..."; \
+                    gcloud compute tpus tpu-vm scp ../wandb.key tpu-test-$i:~/ \
+                           --worker=all \
+                           --zone=us-central2-b; \
+                    gcloud compute tpus tpu-vm scp ../setup.py tpu-test-$i:~/ \
+                           --worker=all \
+                           --zone=us-central2-b; \
+                    gcloud compute tpus tpu-vm scp ../environment.yml tpu-test-$i:~/ \
+                           --worker=all \
+                           --zone=us-central2-b; \
                     gcloud compute tpus tpu-vm scp ../diotima/ tpu-test-$i:~/diotima \
-                           --zone=us-central1-f \
+                           --worker=all \
+                           --zone=us-central2-b \
                            --recurse; \
                     gcloud compute tpus tpu-vm scp ./optimize.py tpu-test-$i:~/ \
-                           --zone=us-central1-f; \
-    done
+                           --worker=all \
+                           --zone=us-central2-b; \
+    done;
 
-# 3. Run VMs (w/ local env var).
-for i in {0..1}; do echo "[*] Running master script on tpu-vm-"$i"..."; \
+# Run VMs (w/ local env var).
+for i in {0..0}; do echo "[*] Running master script on tpu-vm-"$i"..."; \
                     gcloud compute tpus tpu-vm ssh tpu-test-$i \
-                           --zone=us-central1-f \
-                           --command="wget https://repo.anaconda.com/miniconda/Miniconda3-py310_23.3.1-0-Linux-x86_64.sh -O ~/miniconda.sh; \
+                           --worker=all \
+                           --zone=us-central2-b \
+                           --command='wget https://repo.anaconda.com/miniconda/Miniconda3-py310_23.3.1-0-Linux-x86_64.sh -O ~/miniconda.sh; \
                           chmod +x ~/miniconda.sh; \
                           ~/miniconda.sh -b -p ~/miniconda; \
-                          export PATH=\"~/miniconda/bin:$PATH\"; \
+                          export PATH=~/miniconda/bin:$PATH; \
                           conda init bash; \
-                          source \"$HOME/miniconda/bin/activate\"; \
+                          conda update -n base -c defaults conda -y; \
+                          source $HOME/miniconda/bin/activate; \
                           conda env create -f environment.yml; \
                           conda activate diotima; \
-                          mkdir ckpts; \
-                          export JAX_COORD_ADDR=10.128.0.11:8888; \
-                          export JAX_NUM_HOSTS=2; \
-                          export JAX_PROCESS_ID=$i; \
-                          wandb login $\(cat wandb.key\); \
-                          python optimize.py" & \
-    done
+                          wandb login $(cat wandb.key); \
+                          pip install jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_releases.html; \
+                          python optimize.py' ; \
+    done;
 
-# 4. Fetch checkpoints.
-echo "[*] Copying codebase to tpu-vm-"$i"..."; gcloud compute tpus tpu-vm scp tpu-test-0:~/config.pickle ./ --zone=us-central1-f
-
-# 5. Delete all VMs.
-for i in {0..0}; do echo "[*] Deleting tpu-vm-"$i"..."; gcloud compute tpus tpu-vm delete tpu-test-$i --zone=us-central1-f; done
-
----
-
-# Clean up VMs without deleting them (i.e. hold onto VMs).
-for i in {0..1}; do echo "[*] Running master script on tpu-vm-"$i"..."; \
+# Clean up VMs.
+for i in {0..0}; do echo "[*] Cleansing tpu-vm-"$i"..."; \
                     gcloud compute tpus tpu-vm ssh tpu-test-$i \
-                           --zone=us-central1-f \
-                           --command="rm -rf ./*" & \
-    done
+                           --worker=all \
+                           --zone=us-central2-b \
+                           --command="rm -rf ~/*" ; \
+    done;
 
-# pip install --upgrgade jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+# Create TPU VMs.
+# for i in {0..0}; do echo "[*] Starting tpu-vm-"$i"..."; \
+#                     gcloud compute tpus tpu-vm create tpu-test-$i \
+#                            --zone=us-central2-b \
+#                            --accelerator-type=v4-64 \
+#                            --version=tpu-ubuntu2204-base; \
+#     done;
+
+# Fetch checkpoints.
+# echo "[*] Copying codebase to tpu-vm-"$i"..."; gcloud compute tpus tpu-vm scp tpu-test-0:~/config.pickle ./ --zone=us-central2-b
+
+# Delete all VMs.
+# for i in {0..0}; do echo "[*] Deleting tpu-vm-"$i"..."; gcloud compute tpus tpu-vm delete tpu-test-$i --zone=us-central2-b; done
+
+# Stop all VMs.
+# for i in {0..0}; do echo "[*] Stopping tpu-vm-"$i"..."; gcloud compute tpus tpu-vm stop tpu-test-$i --zone=us-central2-b; done
+
+# Start all VMs.
+# for i in {0..0}; do echo "[*] Starting tpu-vm-"$i"..."; gcloud compute tpus tpu-vm start tpu-test-$i --zone=us-central2-b; done
