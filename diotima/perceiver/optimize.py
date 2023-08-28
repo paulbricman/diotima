@@ -24,6 +24,9 @@ OptState = Tuple[optax.TraceState,
                  optax.ScaleState]
 
 
+hk.vmap.require_split_rng = False
+
+
 class Data(NamedTuple):
     universe_config: UniverseConfig
     atom_elems: Array
@@ -40,14 +43,14 @@ class Agents(NamedTuple):
 
 def synth_universe_data(config: Dict):
     universe_config = UniverseConfig(**config["data"]["universe_config"])
-    universe = seed(universe_config, next(config["rng"]))
+    universe = seed(universe_config, config["rng"])
     universe = run(universe, config["data"]["steps"])
 
     cfs = spawn_counterfactuals(
         universe,
         config["data"]["start"],
         config["data"]["n_cfs"],
-        next(config["rng"])
+        config["rng"]
     )
 
     def cf_to_datum(cf): return Data(
@@ -70,7 +73,14 @@ def synth_universe_data(config: Dict):
 
 
 def synth_data(config: Dict):
-    def pure_synth_universe_data(_): return synth_universe_data(config)
+    synth_data_rngs = jax.random.split(config["rng"], config["data"]["n_univs"])
+    # Local config copy to avoid side effects:
+    config = config.copy()
+
+    def pure_synth_universe_data(univ):
+        config["rng"] = synth_data_rngs[univ]
+        return synth_universe_data(config)
+    
     return jax.vmap(pure_synth_universe_data)(jnp.arange(config["data"]["n_univs"]))
 
 
@@ -118,7 +128,7 @@ def raw_forward(data: Data, config: Dict, is_training: bool):
         latent = rearrange(latent, "u z -> u 1 z")
         return decoder(decoder_query, latent, is_training=is_training)
 
-    one_step_preds = jax.vmap(decode_slot, in_axes=1)(latents)
+    one_step_preds = hk.vmap(decode_slot, in_axes=1)(latents)
     agg_one_step_preds = reduce(one_step_preds, "z u a l -> u a l", "sum")
     flows = rearrange(one_step_preds, "z u (b a) l -> u b z a l", b=config["optimize_perceiver"]["branches"])
 
@@ -127,7 +137,7 @@ def raw_forward(data: Data, config: Dict, is_training: bool):
             state = state + agg_one_step_preds
             return state, state
 
-        forecast = jax.lax.scan(
+        forecast = hk.scan(
             inject_one_step,
             decoder_query_space_pos,
             None,
@@ -182,7 +192,7 @@ def init_opt(config: Dict):
     data = synth_data(config)
 
     forward = hk.transform(raw_forward)
-    params = forward.init(next(config["rng"]), data, config, True)
+    params = forward.init(config["rng"], data, config, True)
 
     optim = optax.adamw(config["optimize_perceiver"]["lr"], eps_root=1e-10)
     opt_state = optim.init(params)
@@ -192,12 +202,11 @@ def init_opt(config: Dict):
 
 def loss(
         params: hk.Params,
-        opt_state: OptState,
         forward,
         data: Data,
         config: Dict
 ):
-    out = forward.apply(params, next(config["rng"]), data, config, is_training=True)
+    out = forward.apply(params, config["rng"], data, config, is_training=True)
     data, agents = out
     error = distance(data.pred_locs_future, data.locs_future)
 
@@ -246,7 +255,7 @@ def backward(
         config: Dict,
         epoch: Array
 ):
-    perceiver_loss, grads = jax.value_and_grad(loss)(params, opt_state, forward, data, config)
+    perceiver_loss, grads = jax.value_and_grad(loss)(params, forward, data, config)
 
     def agg_grads(grad):
         return jax.lax.pmean(grad, axis_name="devices")
@@ -274,9 +283,12 @@ def optimize_perceiver(
         perceiver_optim,
         forward
 ):
+    optimize_perceiver_rngs = jax.random.split(config["rng"], config["optimize_perceiver"]["epochs"])
+
     def scanned_backward(opt_perceiver_state, _):
-        data = synth_data(config)
         params, opt_state, opt_perceiver_epoch, _ = opt_perceiver_state
+        config["rng"] = optimize_perceiver_rngs[opt_perceiver_epoch]
+        data = synth_data(config)
         params, opt_state, perceiver_loss = backward(
             params, opt_state, forward, perceiver_optim, data, config, opt_perceiver_epoch)
 
@@ -286,10 +298,6 @@ def optimize_perceiver(
     def scan_backward(_):
         init_opt_perceiver_state = (perceiver_params, perceiver_opt_state, 0, 0)
 
-        # Weirdest bug ever:
-        # Jitting without scanning works here, so does scanning with jit disabled.
-        # Yet scanning with jit enabled fails.
-        # Solution? Jit in advance, scan with locally disabled jit.
         carry, history = jax.lax.scan(
             scanned_backward,
             init_opt_perceiver_state,
@@ -301,13 +309,15 @@ def optimize_perceiver(
 
 def optimize_universe_config(config: Dict):
     log = config["infra"]["log"]
+    optimize_universe_config_rngs = jax.random.split(config["rng"], config["optimize_universe_config"]["epochs"])
 
     def universe_config_state_to_config(universe_config_state):
         physics_config, elem_distrib = universe_config_state
         return default_config(physics_config, elem_distrib, log)
 
-    def compute_param_count(universe_config_state):
+    def compute_param_count(universe_config_state, opt_universe_epoch):
         config = universe_config_state_to_config(universe_config_state)
+        config["rng"] = optimize_universe_config_rngs[opt_universe_epoch]
 
         params, perceiver_opt_state, perceiver_optim, forward = init_opt(config)
 
@@ -320,7 +330,7 @@ def optimize_universe_config(config: Dict):
     def scan_optimize_universe_config(_):
         def init():
             universe_config_state = (config["data"]["universe_config"]["physics_config"],
-                                 config["data"]["universe_config"]["elem_distrib"])
+                                    config["data"]["universe_config"]["elem_distrib"])
             universe_config_optim = optax.adamw(config["optimize_universe_config"]["lr"], eps_root=1e-10)
             universe_config_opt_state = universe_config_optim.init(universe_config_state)
             return universe_config_state, universe_config_opt_state, universe_config_optim
@@ -330,7 +340,7 @@ def optimize_universe_config(config: Dict):
         @jax.checkpoint
         def scanned_optimize_universe_config(opt_universe_config_state, _):
             universe_config_state, universe_config_opt_state, opt_universe_epoch, _, _ = opt_universe_config_state
-            value, grads = jax.value_and_grad(compute_param_count, has_aux=True)(universe_config_state)
+            value, grads = jax.value_and_grad(compute_param_count, has_aux=True)(universe_config_state, opt_universe_epoch)
             param_count, aux = value
             params, perceiver_loss_history = aux
 
@@ -425,7 +435,7 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
                 "elem_distrib": elem_distrib
             }
         },
-        "rng": hk.PRNGSequence(jax.random.PRNGKey(0)),
+        "rng": jax.random.PRNGKey(0),
         "preprocessor": {
             "fourier_position_encoding_kwargs": {
                 "num_bands": 1,

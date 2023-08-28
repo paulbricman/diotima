@@ -9,18 +9,16 @@ import optax
 
 import pytest
 from safetensors.flax import load_file
+import os
+
+
+flags = os.environ.get('XLA_FLAGS', '')
+os.environ['XLA_FLAGS'] = flags + " --xla_force_host_platform_device_count=2"
 
 
 @pytest.fixture
 def config():
     return default_config(default_physics_config(2), default_elem_distrib(2))
-
-
-def test_hk_next_rng(config):
-    first = next(config["rng"])
-    second = next(config["rng"])
-
-    assert not jnp.allclose(first, second)
 
 
 def test_synth_universe_data(config):
@@ -45,7 +43,7 @@ def test_raw_forward(config):
     params, opt_state, optim, forward = init_opt(config)
 
     out = forward.apply(
-        params, next(config["rng"]), data, config, True)
+        params, config["rng"], data, config, True)
     data, agents = out
 
     assert data.pred_locs_future.shape == (
@@ -88,7 +86,7 @@ def test_distance():
 def test_loss(config):
     data = synth_data(config)
     params, opt_state, optim, forward = init_opt(config)
-    error = loss(params, opt_state, forward, data, config)
+    error = loss(params, forward, data, config)
 
     assert error.size == 1
 

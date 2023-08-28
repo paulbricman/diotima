@@ -36,7 +36,7 @@ for i in {0..0}; do echo "[*] Running master script on tpu-vm-"$i"..."; \
                           conda activate diotima; \
                           wandb login $(cat wandb.key); \
                           pip install jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_releases.html; \
-                          python optimize.py' ; \
+                          JAX_DISABLE_JIT=1 python optimize.py' ; \
     done;
 
 # Clean up VMs.

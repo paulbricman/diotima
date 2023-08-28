@@ -99,7 +99,7 @@ def layer_norm(x, name=None):
 def make_cross_attention_mask(query_mask, kv_mask):
     batch_size, query_len = query_mask.shape
     _, key_len = kv_mask.shape
-    mask = jax.vmap(jnp.outer)(query_mask, kv_mask)
+    mask = hk.vmap(jnp.outer)(query_mask, kv_mask)
     assert mask.shape == (batch_size, query_len, key_len)
     return mask
 
