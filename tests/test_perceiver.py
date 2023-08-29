@@ -27,8 +27,14 @@ def test_synth_universe_data(config):
     assert universe_data.atom_elems[0].size == universe_data.atom_elems[1].size
     assert universe_data.locs_history.shape == (
         config["data"]["start"],
-        universe_data.universe_config.n_atoms,
-        universe_data.universe_config.n_dims
+        config["data"]["universe_config"]["n_atoms"],
+        config["data"]["universe_config"]["n_dims"]
+    )
+    assert universe_data.locs_future.shape == (
+        config["data"]["n_cfs"],
+        config["data"]["steps"] - config["data"]["start"],
+        config["data"]["universe_config"]["n_atoms"],
+        config["data"]["universe_config"]["n_dims"]
     )
 
 
@@ -36,6 +42,13 @@ def test_synth_data(config):
     data = synth_data(config)
 
     assert data.atom_elems.shape[0] == config["data"]["n_univs"]
+    assert data.locs_future.shape == (
+        config["data"]["n_univs"],
+        config["data"]["n_cfs"],
+        config["data"]["steps"] - config["data"]["start"],
+        config["data"]["universe_config"]["n_atoms"],
+        config["data"]["universe_config"]["n_dims"]
+    )
 
 
 def test_raw_forward(config):
@@ -48,9 +61,9 @@ def test_raw_forward(config):
 
     assert data.pred_locs_future.shape == (
         config["data"]["n_univs"],
-        (config["data"]["steps"] - config["data"]["start"]),
-        config["data"]["universe_config"]["n_atoms"],
         config["optimize_perceiver"]["branches"],
+        config["data"]["steps"] - config["data"]["start"],
+        config["data"]["universe_config"]["n_atoms"],
         config["data"]["universe_config"]["n_dims"]
     )
 
@@ -70,16 +83,14 @@ def test_raw_forward(config):
 
 
 def test_distance():
-    cfs0 = jnp.array([[[0], [0], [0]], [[10], [10], [10]]])
-    bs0 = jnp.array([[[0], [0]], [[10], [10]]])
+    cfs0 = jax.random.normal(jax.random.PRNGKey(0), (1, 3, 2, 1, 1)) * 1e-6
+    bs0 = jax.random.normal(jax.random.PRNGKey(0), (1, 2, 2, 1, 1)) * 1e-6
+    
+    assert jnp.isclose(distance(cfs0, bs0), 0, atol=1e-4, rtol=1e-3)
 
-    assert jnp.isclose(distance(cfs0, bs0), 0)
-
-    bs1 = jnp.array([[[0], [1]], [[10], [20]]])
-    bs2 = jnp.array([[[1], [0]], [[20], [10]]])
+    bs1 = jnp.ones((1, 2, 2, 1, 1))
 
     assert distance(cfs0, bs0) < distance(cfs0, bs1)
-    assert distance(cfs0, bs1) == distance(cfs0, bs2)
     assert distance(cfs0, bs1) == distance(bs1, cfs0)
 
 

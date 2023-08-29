@@ -144,7 +144,7 @@ def raw_forward(data: Data, config: Dict, is_training: bool):
             future_steps)
         forecast = rearrange(
             forecast[1],
-            "t u (b a) l -> u t a b l",
+            "t u (b a) l -> u b t a l",
             b=config["optimize_perceiver"]["branches"])
         return forecast
 
@@ -219,10 +219,10 @@ def distance(
 ):
     # Differentiable cousin of Hausdorff distance
     def compute_batch_distances(cfs, bs):
-        def compute_distances(cf, bs):
-            distances = jnp.linalg.norm(cf - bs, axis=1)
-            weights = 1 - jax.nn.softmax(distances)
-            softmin = jnp.dot(distances, weights)
+        def compute_distances(x, ys):
+            distances = jnp.linalg.norm(x - ys, axis=-1)
+            weights = 1 - jax.nn.softmax(distances) + 1e-8
+            softmin = jnp.average(distances, weights=weights, axis=(1, 2))
             return softmin
 
         # Iterate over cfs to find shortest way to bs
@@ -315,7 +315,7 @@ def optimize_universe_config(config: Dict):
         physics_config, elem_distrib = universe_config_state
         return default_config(physics_config, elem_distrib, log)
 
-    def compute_param_count(universe_config_state, opt_universe_epoch):
+    def compute_sophistication(universe_config_state, opt_universe_epoch):
         config = universe_config_state_to_config(universe_config_state)
         config["rng"] = optimize_universe_config_rngs[opt_universe_epoch]
 
@@ -340,7 +340,7 @@ def optimize_universe_config(config: Dict):
         @jax.checkpoint
         def scanned_optimize_universe_config(opt_universe_config_state, _):
             universe_config_state, universe_config_opt_state, opt_universe_epoch, _, _ = opt_universe_config_state
-            value, grads = jax.value_and_grad(compute_param_count, has_aux=True)(universe_config_state, opt_universe_epoch)
+            value, grads = jax.value_and_grad(compute_sophistication, has_aux=True)(universe_config_state, opt_universe_epoch)
             param_count, aux = value
             params, perceiver_loss_history = aux
 
@@ -372,7 +372,6 @@ def optimize_universe_config(config: Dict):
     # Good old for loops for non-JIT, non-JVP logging.
     # Aggregate across hosts and devices.
     if config["infra"]["log"] and jax.process_index() == 0:
-        # param_count = reduce(param_count, "h ue -> ue", "mean")
         for idx, epoch in enumerate(param_count):
             wandb.log({"optimize_universe_config_param_count": epoch}, step=idx)
         
@@ -409,10 +408,9 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "log": log
         },
         "optimize_perceiver": {
-            "epochs": 4,
-            "branches": 2,
-            "agg_every": 2,
-            "ckpt_every": 1,
+            "epochs": 8,
+            "branches": 4,
+            "agg_every": 4,
             "lr": 1e-3,
             "weight_decay": 1e-8
         },
@@ -422,13 +420,13 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "weight_decay": 1e-8
         },
         "data": {
-            "n_univs": 2,
-            "steps": 6,
+            "n_univs": 8,
+            "steps": 16,
             "n_cfs": 4,
-            "start": 4,
+            "start": 8,
             "universe_config": {
                 "n_elems": 2,
-                "n_atoms": 2,
+                "n_atoms": 16,
                 "n_dims": 2,
                 "dt": 0.1,
                 "physics_config": physics_config,
@@ -438,28 +436,28 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
         "rng": jax.random.PRNGKey(0),
         "preprocessor": {
             "fourier_position_encoding_kwargs": {
-                "num_bands": 1,
+                "num_bands": 4,
                 "max_resolution": [1],
                 "sine_only": False,
                 "concat_pos": True
             }
         },
         "encoder": {
-            "z_index_dim": 4,
-            "num_z_channels": 4,
+            "z_index_dim": 8,
+            "num_z_channels": 8,
             "num_cross_attend_heads": 1,
-            "num_blocks": 1,
+            "num_blocks": 2,
             "num_self_attends_per_block": 2,
             "num_self_attend_heads": 2,
             "dropout_prob": 0.2
         },
         "decoder": {
             "output_num_channels": 2,  # Has to match n_dims
-            "num_z_channels": 4,
+            "num_z_channels": 8,
             "use_query_residual": False,
             "position_encoding_type": "fourier",
             "fourier_position_encoding_kwargs": {
-                "num_bands": 1,
+                "num_bands": 4,
                 "max_resolution": [1],
                 "sine_only": True,
                 "concat_pos": False
