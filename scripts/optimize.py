@@ -9,11 +9,14 @@ import numpy as np
 import pickle
 import wandb
 
+print("[*] Initializing distributed job...", jax.process_index())
+jax.distributed.initialize()
 
 print("[*] Initializing config...")
 config = default_config(log=True)
 config["data"]["universe_config"]["elem_distrib"] = default_elem_distrib(config["data"]["universe_config"]["n_elems"])
 config["data"]["universe_config"]["physics_config"] = default_physics_config(config["data"]["universe_config"]["n_elems"])
+
 
 if jax.process_index() == 0:
     print("[*] Initializing logging...")

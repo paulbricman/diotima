@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# Create TPU VMs.
+# for i in {0..0}; do echo "[*] Starting tpu-vm-"$i"..."; \
+#                     gcloud compute tpus tpu-vm create tpu-test-$i \
+#                            --zone=us-central2-b \
+#                            --accelerator-type=v4-64 \
+#                            --version=tpu-ubuntu2204-base; \
+#     done;
+
 # Copy codebase on all VMs.
 for i in {0..0}; do echo "[*] Copying codebase to tpu-vm-"$i"..."; \
                     gcloud compute tpus tpu-vm scp ../wandb.key tpu-test-$i:~/ \
@@ -36,23 +44,27 @@ for i in {0..0}; do echo "[*] Running master script on tpu-vm-"$i"..."; \
                           conda activate diotima; \
                           wandb login $(cat wandb.key); \
                           pip install jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_releases.html; \
-                          JAX_DISABLE_JIT=1 python optimize.py' ; \
+                          pip install einops;';
     done;
 
-# Clean up VMs.
-for i in {0..0}; do echo "[*] Cleansing tpu-vm-"$i"..."; \
+# Run VMs (w/ local env var).
+for i in {0..0}; do echo "[*] Running master script on tpu-vm-"$i"..."; \
                     gcloud compute tpus tpu-vm ssh tpu-test-$i \
                            --worker=all \
                            --zone=us-central2-b \
-                           --command="rm -rf ~/*" ; \
+                           --command='export PATH=~/miniconda/bin:$PATH; \
+                            source $HOME/miniconda/bin/activate; \
+                            conda activate diotima; \
+                            JAX_DISABLE_JIT=1 python optimize.py;';
     done;
 
-# Create TPU VMs.
-# for i in {0..0}; do echo "[*] Starting tpu-vm-"$i"..."; \
-#                     gcloud compute tpus tpu-vm create tpu-test-$i \
+
+# Clean up VMs.
+# for i in {0..0}; do echo "[*] Cleansing tpu-vm-"$i"..."; \
+#                     gcloud compute tpus tpu-vm ssh tpu-test-$i \
+#                            --worker=all \
 #                            --zone=us-central2-b \
-#                            --accelerator-type=v4-64 \
-#                            --version=tpu-ubuntu2204-base; \
+#                            --command="rm -rf ~/*" ; \
 #     done;
 
 # Fetch checkpoints.
