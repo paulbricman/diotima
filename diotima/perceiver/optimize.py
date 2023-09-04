@@ -248,18 +248,20 @@ def backward(
 ):
     perceiver_loss, grads = jax.value_and_grad(loss)(params, forward, data, config)
 
-    def agg_grads(grad):
-        return jax.lax.pmean(grad, axis_name="devices")
+    # def agg_grads(grad):
+    #     return jax.lax.pmean(grad, axis_name="devices")
 
-    def no_agg_grads(grad):
-        return grad
+    # def no_agg_grads(grad):
+    #     return grad
 
-    grads = jax.lax.cond(
-        epoch % config["optimize_perceiver"]["agg_every"] == 0,
-        agg_grads,
-        no_agg_grads,
-        grads,
-    )
+    # grads = jax.lax.cond(
+    #     epoch % config["optimize_perceiver"]["agg_every"] == 0,
+    #     agg_grads,
+    #     no_agg_grads,
+    #     grads,
+    # )
+
+    grads = jax.lax.pmean(grads, axis_name="devices")
 
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
@@ -278,6 +280,7 @@ def optimize_perceiver(
         config["rng"], config["optimize_perceiver"]["epochs"]
     )
 
+    @jax.checkpoint
     def scanned_backward(opt_perceiver_state, _):
         params, opt_state, opt_perceiver_epoch, _ = opt_perceiver_state
         config["rng"] = optimize_perceiver_rngs[opt_perceiver_epoch]
@@ -299,13 +302,14 @@ def optimize_perceiver(
     def scan_backward(_):
         init_opt_perceiver_state = (perceiver_params, perceiver_opt_state, 0, 0)
 
-        carry, history = jax.lax.scan(
-            scanned_backward,
-            init_opt_perceiver_state,
-            None,
-            config["optimize_perceiver"]["epochs"],
-        )
-        return carry, history
+        with jax.disable_jit():
+            carry, history = jax.lax.scan(
+                scanned_backward,
+                init_opt_perceiver_state,
+                None,
+                config["optimize_perceiver"]["epochs"],
+            )
+            return carry, history
 
     return jax.pmap(scan_backward, axis_name="devices")(
         jnp.arange(jax.local_device_count())
@@ -370,19 +374,6 @@ def optimize_universe_config(config: Dict):
             param_count, aux = value
             params, perceiver_loss_history = aux
 
-            # TODO: Test this move.
-            if config["infra"]["log"] and jax.process_index() == 0:
-                wandb.log(
-                    {"optimize_universe_config_loss": param_count},
-                    step=opt_universe_epoch,
-                )
-
-                agg_perceiver_loss_history = reduce(
-                    perceiver_loss_history, "d pe -> pe", "mean"
-                )
-                for idx, epoch in enumerate(agg_perceiver_loss_history):
-                    wandb.log({"optimize_perceiver_loss": epoch}, step=idx)
-
             updates, universe_config_opt_state = universe_config_optim.update(
                 grads, universe_config_opt_state, universe_config_state
             )
@@ -397,23 +388,24 @@ def optimize_universe_config(config: Dict):
 
             return opt_universe_config_state, opt_universe_config_state
 
-        return jax.lax.scan(
-            scanned_optimize_universe_config,
-            (
-                universe_config_state,
-                universe_config_opt_state,
-                0,
-                0,
-                jnp.zeros(
-                    (
-                        config["infra"]["num_devices"],
-                        config["optimize_perceiver"]["epochs"],
-                    )
+        with jax.disable_jit():
+            return jax.lax.scan(
+                scanned_optimize_universe_config,
+                (
+                    universe_config_state,
+                    universe_config_opt_state,
+                    0,
+                    0,
+                    jnp.zeros(
+                        (
+                            jax.local_device_count(),
+                            config["optimize_perceiver"]["epochs"],
+                        )
+                    ),
                 ),
-            ),
-            None,
-            config["optimize_universe_config"]["epochs"],
-        )
+                None,
+                config["optimize_universe_config"]["epochs"],
+            )
 
     (
         opt_universe_config_carry,
@@ -430,6 +422,12 @@ def optimize_universe_config(config: Dict):
     if config["infra"]["log"] and jax.process_index() == 0:
         for idx, epoch in enumerate(param_count):
             wandb.log({"optimize_universe_config_param_count": epoch}, step=idx)
+
+        perceiver_loss_history = reduce(
+            perceiver_loss_history, "ue d pe -> (ue pe)", "mean"
+        )
+        for idx, epoch in enumerate(perceiver_loss_history):
+            wandb.log({"optimize_perceiver_loss": epoch}, step=idx)
 
     return config
 
@@ -450,10 +448,6 @@ def sanitize_config(config: Dict):
 def default_config(physics_config=None, elem_distrib=None, log=False):
     config = {
         "infra": {
-            "coordinator_address": os.environ.get("JAX_COORD_ADDR", "127.0.0.1:8888"),
-            "num_hosts": os.environ.get("JAX_NUM_HOSTS", 1),
-            "process_id": os.environ.get("JAX_PROCESS_ID", 0),
-            "num_devices": jax.local_device_count(),
             "log": log,
         },
         "optimize_perceiver": {
@@ -465,13 +459,13 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
         },
         "optimize_universe_config": {"epochs": 8, "lr": 1e-3, "weight_decay": 1e-8},
         "data": {
-            "n_univs": 8,
-            "steps": 16,
-            "n_cfs": 4,
-            "start": 8,
+            "n_univs": 9,
+            "steps": 4,
+            "n_cfs": 5,
+            "start": 2,
             "universe_config": {
                 "n_elems": 2,
-                "n_atoms": 16,
+                "n_atoms": 128,
                 "n_dims": 2,
                 "dt": 0.1,
                 "physics_config": physics_config,
@@ -500,7 +494,6 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "output_num_channels": 2,  # Has to match n_dims
             "num_z_channels": 8,
             "use_query_residual": False,
-            "position_encoding_type": "fourier",
             "fourier_position_encoding_kwargs": {
                 "num_bands": 4,
                 "max_resolution": [1],

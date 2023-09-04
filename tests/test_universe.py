@@ -26,23 +26,14 @@ def test_init_universe(universe: Universe):
 
 
 def test_one_step(universe: Universe):
-    motions = motion(
-        universe.atom_locs,
-        universe.atom_elems,
-        universe.universe_config
-    )
+    motions = motion(universe.atom_locs, universe.atom_elems, universe.universe_config)
 
     init_locs = universe.atom_locs
     universe = run(universe)
     final_locs = universe.atom_locs
 
     # Given the one step run default, this should hold.
-    assert jnp.allclose(
-        init_locs +
-        universe.universe_config.dt *
-        motions.sum(axis=1),
-        final_locs
-    )
+    assert jnp.allclose(init_locs + universe.universe_config.dt * motions, final_locs)
 
 
 def test_run(universe: Universe):
@@ -54,30 +45,18 @@ def test_run(universe: Universe):
     assert not jnp.allclose(universe1.atom_locs, universe2.atom_locs)
     assert jnp.allclose(universe2.atom_locs, parallel_universe2.atom_locs)
 
-    assert jnp.allclose(
-        universe2.locs_history,
-        parallel_universe2.locs_history)
+    assert jnp.allclose(universe2.locs_history, parallel_universe2.locs_history)
     assert universe2.locs_history.shape == (
         2,
         universe2.universe_config.n_atoms,
-        universe2.universe_config.n_dims
-    )
-    assert universe2.motions_history.shape == (
-        2,
-        universe2.universe_config.n_atoms,
-        universe2.universe_config.n_atoms,
-        universe2.universe_config.n_dims
+        universe2.universe_config.n_dims,
     )
 
 
 def test_simple_run_with_adv_opt(universe: Universe):
     vanilla_universe = run(universe, 5)
-    adv_opt_universe = run(
-        universe, 5, False, BrownianOptimizer(
-            jax.random.PRNGKey(0)))
-    assert not jnp.allclose(
-        vanilla_universe.atom_locs,
-        adv_opt_universe.atom_locs)
+    adv_opt_universe = run(universe, 5, False, BrownianOptimizer(jax.random.PRNGKey(0)))
+    assert not jnp.allclose(vanilla_universe.atom_locs, adv_opt_universe.atom_locs)
 
 
 def test_trim_rerun(universe: Universe):
@@ -87,7 +66,6 @@ def test_trim_rerun(universe: Universe):
 
     assert jnp.allclose(target.atom_locs, retarget.atom_locs)
     assert jnp.allclose(target.locs_history, retarget.locs_history)
-    assert jnp.allclose(target.motions_history, retarget.motions_history)
     assert jnp.allclose(target.jac_history, retarget.jac_history)
     assert target.step == retarget.step
 
