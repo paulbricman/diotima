@@ -28,12 +28,7 @@ def config():
 
 
 def test_synth_universe_data(config):
-    # flat_config, unravel = ravel_pytree(config)
-    # universe_data = jax.jit(
-    #     lambda f, u: synth_universe_data(u(f)),
-    #     static_argnums=(0, 1),
-    # )(flat_config.to_list, unravel)-
-    universe_data = synth_universe_data(config)
+    universe_data = synth_universe_data(config, jax.random.PRNGKey(0))
 
     assert universe_data.atom_elems[0].size == universe_data.atom_elems[1].size
     assert universe_data.locs_history.shape == (
@@ -50,7 +45,7 @@ def test_synth_universe_data(config):
 
 
 def test_synth_data(config):
-    data = synth_data(config)
+    data = synth_data(config, jax.random.PRNGKey(0))
 
     assert data.atom_elems.shape[0] == config["data"]["n_univs"]
     assert data.locs_future.shape == (
@@ -63,10 +58,10 @@ def test_synth_data(config):
 
 
 def test_raw_forward(config):
-    data = synth_data(config)
-    params, opt_state, optim, forward = init_opt(config)
+    data = synth_data(config, jax.random.PRNGKey(0))
+    params, opt_state, optim, forward = init_opt(config, jax.random.PRNGKey(0))
 
-    out = forward.apply(params, config["rng"], data, config, True)
+    out = forward.apply(params, jax.random.PRNGKey(0), data, config, True)
     data, agents = out
 
     assert data.pred_locs_future.shape == (
@@ -105,23 +100,25 @@ def test_distance():
 
 
 def test_loss(config):
-    data = synth_data(config)
-    params, opt_state, optim, forward = init_opt(config)
-    error = loss(params, forward, data, config)
+    data = synth_data(config, jax.random.PRNGKey(0))
+    params, opt_state, optim, forward = init_opt(config, jax.random.PRNGKey(0))
+    error = loss(params, forward, data, config, jax.random.PRNGKey(0))
 
     assert error.size == 1
 
 
 def test_optimize_perceiver(config):
-    params, opt_state, optim, forward = init_opt(config)
+    params, opt_state, optim, forward = init_opt(config, jax.random.PRNGKey(0))
 
-    carry, history = optimize_perceiver(config, params, opt_state, optim, forward)
+    carry, history = optimize_perceiver(
+        config, params, opt_state, optim, forward, jax.random.PRNGKey(0)
+    )
     params, opt_state, epoch, perceiver_loss = carry
     assert epoch == config["optimize_perceiver"]["epochs"]
 
 
 def test_optimize_universe_config(config):
-    new_config = optimize_universe_config(config)
+    new_config = optimize_universe_config(config, jax.random.PRNGKey(0))
     assert not pytrees_equal(
         config["data"]["universe_config"]["physics_config"],
         new_config["data"]["universe_config"]["physics_config"],

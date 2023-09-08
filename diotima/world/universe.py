@@ -21,6 +21,7 @@ class UniverseConfig(NamedTuple):
     dt: float
     physics_config: Array
     elem_distrib: Array
+    batch_size: int = 2
 
 
 def default_universe_config():
@@ -41,7 +42,6 @@ class Universe(NamedTuple):
     Object holding universe state.
     """
 
-    universe_config: UniverseConfig
     atom_locs: Array
     atom_elems: Array
     locs_history: Array = None
@@ -73,11 +73,15 @@ def seed(
         key_elems,
     )
 
-    return Universe(universe_config, atom_locs, atom_elems)
+    return Universe(atom_locs, atom_elems)
 
 
 def run(
-    universe: Universe, n_steps: int = 1, get_jac: bool = False, init_adv_opt=None
+    universe: Universe,
+    universe_config: UniverseConfig,
+    n_steps: int = 1,
+    get_jac: bool = False,
+    init_adv_opt=None,
 ) -> Universe:
     """
     Run universe `n_steps` forward.
@@ -94,7 +98,7 @@ def run(
     def pure_step(state, _):
         snapshot, adv_opt = state
         new_snapshot = physics.step(
-            snapshot.locs, universe.atom_elems, universe.universe_config, get_jac
+            snapshot.locs, universe.atom_elems, universe_config, get_jac
         )
 
         if adv_opt:
@@ -102,8 +106,8 @@ def run(
             delta = jax.random.normal(
                 subkey,
                 shape=(
-                    universe.universe_config.n_atoms,
-                    universe.universe_config.n_dims,
+                    universe_config.n_atoms,
+                    universe_config.n_dims,
                 ),
             )
             new_snapshot = physics.Snapshot(new_snapshot.locs + delta, new_snapshot.jac)
@@ -112,38 +116,34 @@ def run(
         state = new_snapshot, adv_opt
         return state, state
 
-    with jax.disable_jit():
-        last_state, state_history = jax.lax.scan(
-            pure_step,
-            (
-                physics.first_snapshot(universe.atom_locs, universe.universe_config),
-                init_adv_opt,
-            ),
-            None,
-            n_steps,
-        )
-        last_state = last_state[0]
-        state_history = state_history[0]
+    last_state, state_history = jax.lax.scan(
+        pure_step,
+        (
+            physics.first_snapshot(universe.atom_locs, universe_config),
+            init_adv_opt,
+        ),
+        None,
+        n_steps,
+    )
+    last_state = last_state[0]
+    state_history = state_history[0]
 
-        if universe.locs_history is not None:
-            updated_locs_history = jnp.concatenate(
-                (universe.locs_history, state_history.locs)
-            )
-            updated_jac_history = jnp.concatenate(
-                (universe.jac_history, state_history.jac)
-            )
-        else:
-            updated_locs_history = state_history.locs
-            updated_jac_history = state_history.jac
-
-        return Universe(
-            universe.universe_config,
-            last_state.locs,
-            universe.atom_elems,
-            updated_locs_history,
-            updated_jac_history,
-            universe.step + n_steps,
+    if universe.locs_history is not None:
+        updated_locs_history = jnp.concatenate(
+            (universe.locs_history, state_history.locs)
         )
+        updated_jac_history = jnp.concatenate((universe.jac_history, state_history.jac))
+    else:
+        updated_locs_history = state_history.locs
+        updated_jac_history = state_history.jac
+
+    return Universe(
+        last_state.locs,
+        universe.atom_elems,
+        updated_locs_history,
+        updated_jac_history,
+        universe.step + n_steps,
+    )
 
 
 class BrownianOptimizer(NamedTuple):
@@ -152,6 +152,7 @@ class BrownianOptimizer(NamedTuple):
 
 def spawn_counterfactuals(
     universe: Universe,
+    universe_config: UniverseConfig,
     start: int,
     n_cfs: int,
     key: PRNGKeyArray = jax.random.PRNGKey(0),
@@ -169,7 +170,13 @@ def spawn_counterfactuals(
 
     # Run universes forward using adversarial optimizers
     def spawn_counterfactual(key):
-        return run(common_thread, universe.step - start, False, BrownianOptimizer(key))
+        return run(
+            common_thread,
+            universe_config,
+            universe.step - start,
+            False,
+            BrownianOptimizer(key),
+        )
 
     counterfactuals = jax.vmap(spawn_counterfactual)(keys)
 
@@ -186,7 +193,6 @@ def trim(
     assert until < universe.step
 
     return Universe(
-        universe.universe_config,
         universe.locs_history[until - 1],
         universe.atom_elems,
         universe.locs_history[:until],

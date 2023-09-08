@@ -1,3 +1,4 @@
+from functools import partial
 from diotima.world.universe import UniverseConfig, seed, run, spawn_counterfactuals
 import diotima.world.physics as physics
 from diotima.perceiver.io_processors import DynamicPointCloudPreprocessor
@@ -5,8 +6,10 @@ from diotima.perceiver.perceiver import PerceiverEncoder, BasicDecoder
 
 import jax
 import jax.numpy as jnp
-from jax.experimental.maps import xmap
 from jax._src.prng import PRNGKeyArray
+from jax.experimental.maps import xmap
+from jax.experimental import mesh_utils
+from jax.sharding import Mesh
 from jax import Array
 import haiku as hk
 import optax
@@ -19,14 +22,14 @@ import os
 import wandb
 
 
+jax.config.update("jax_spmd_mode", "allow_all")
 OptState = Tuple[optax.TraceState, optax.ScaleByScheduleState, optax.ScaleState]
-
-
 hk.vmap.require_split_rng = False
+devices = mesh_utils.create_device_mesh((jax.process_count(), jax.local_device_count()))
+mesh = Mesh(devices, axis_names=("hosts", "devices"))
 
 
 class Data(NamedTuple):
-    universe_config: UniverseConfig
     atom_elems: Array
     idx_history: Array
     locs_history: Array
@@ -39,18 +42,21 @@ class Agents(NamedTuple):
     substrates: Array
 
 
-def synth_universe_data(config: Dict):
+def synth_universe_data(config: Dict, key: PRNGKeyArray):
     universe_config = UniverseConfig(**config["data"]["universe_config"])
-    universe = seed(universe_config, config["rng"])
-    universe = run(universe, config["data"]["steps"])
+    universe = seed(universe_config, key)
+    universe = run(universe, universe_config, config["data"]["steps"])
 
     cfs = spawn_counterfactuals(
-        universe, config["data"]["start"], config["data"]["n_cfs"], config["rng"]
+        universe,
+        universe_config,
+        config["data"]["start"],
+        config["data"]["n_cfs"],
+        key,
     )
 
     def cf_to_datum(cf):
         return Data(
-            universe_config=None,
             atom_elems=None,
             idx_history=None,
             locs_history=None,
@@ -59,7 +65,6 @@ def synth_universe_data(config: Dict):
         )
 
     data = jax.vmap(cf_to_datum)(cfs)
-    data = data._replace(universe_config=universe.universe_config)
     data = data._replace(atom_elems=universe.atom_elems)
     data = data._replace(idx_history=jnp.arange(config["data"]["start"]))
     data = data._replace(locs_history=universe.locs_history[: config["data"]["start"]])
@@ -67,21 +72,21 @@ def synth_universe_data(config: Dict):
     return data
 
 
-def synth_data(config: Dict):
-    synth_data_rngs = jax.random.split(config["rng"], config["data"]["n_univs"])
+def synth_data(config: Dict, key: PRNGKeyArray):
+    synth_data_rngs = jax.random.split(key, config["data"]["n_univs"])
     # Local config copy to avoid side effects:
     config = config.copy()
 
     def pure_synth_universe_data(univ):
-        config["rng"] = synth_data_rngs[univ]
-        return synth_universe_data(config)
+        subkey = synth_data_rngs[univ]
+        return synth_universe_data(config, subkey)
 
     return jax.vmap(pure_synth_universe_data)(jnp.arange(config["data"]["n_univs"]))
 
 
 def raw_forward(data: Data, config: Dict, is_training: bool):
     future_steps = config["data"]["steps"] - config["data"]["start"]
-    n_atoms = data.locs_history.shape[2]
+    n_atoms = config["data"]["universe_config"]["n_atoms"]
     atom_locs = rearrange(data.locs_history, "u t a l -> t u a l")[-1]
 
     input = repeat(data.atom_elems, "u a e -> u (t a) e", t=config["data"]["start"])
@@ -149,7 +154,6 @@ def raw_forward(data: Data, config: Dict, is_training: bool):
     forecast = preds_to_forecast()
 
     enriched_data = Data(
-        data.universe_config,
         data.atom_elems,
         data.idx_history,
         data.locs_history,
@@ -185,11 +189,12 @@ def compute_attn_rollouts(scores, repr_self_residual=True):
     return jax.vmap(compute_attn_rollout)(self, cross)
 
 
-def init_opt(config: Dict):
-    data = synth_data(config)
+def init_opt(config: Dict, key: PRNGKeyArray):
+    data_key, init_key = jax.random.split(key, num=2)
+    data = synth_data(config, data_key)
 
     forward = hk.transform(raw_forward)
-    params = forward.init(config["rng"], data, config, True)
+    params = forward.init(init_key, data, config, True)
 
     optim = optax.adamw(config["optimize_perceiver"]["lr"], eps_root=1e-10)
     opt_state = optim.init(params)
@@ -197,8 +202,8 @@ def init_opt(config: Dict):
     return params, opt_state, optim, forward
 
 
-def loss(params: hk.Params, forward, data: Data, config: Dict):
-    out = forward.apply(params, config["rng"], data, config, is_training=True)
+def loss(params: hk.Params, forward, data: Data, config: Dict, key: PRNGKeyArray):
+    out = forward.apply(params, key, data, config, is_training=True)
     data, agents = out
     error = distance(data.pred_locs_future, data.locs_future)
 
@@ -245,23 +250,10 @@ def backward(
     data: Data,
     config: Dict,
     epoch: Array,
+    key: PRNGKeyArray,
 ):
-    perceiver_loss, grads = jax.value_and_grad(loss)(params, forward, data, config)
-
-    # def agg_grads(grad):
-    #     return jax.lax.pmean(grad, axis_name="devices")
-
-    # def no_agg_grads(grad):
-    #     return grad
-
-    # grads = jax.lax.cond(
-    #     epoch % config["optimize_perceiver"]["agg_every"] == 0,
-    #     agg_grads,
-    #     no_agg_grads,
-    #     grads,
-    # )
-
-    grads = jax.lax.pmean(grads, axis_name="devices")
+    perceiver_loss, grads = jax.value_and_grad(loss)(params, forward, data, config, key)
+    # grads = jax.lax.pmean(grads, axis_name="devices")
 
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
@@ -275,16 +267,19 @@ def optimize_perceiver(
     perceiver_opt_state: OptState,
     perceiver_optim,
     forward,
+    key: PRNGKeyArray,
 ):
     optimize_perceiver_rngs = jax.random.split(
-        config["rng"], config["optimize_perceiver"]["epochs"]
+        key, config["optimize_perceiver"]["epochs"]
     )
 
-    @jax.checkpoint
     def scanned_backward(opt_perceiver_state, _):
         params, opt_state, opt_perceiver_epoch, _ = opt_perceiver_state
-        config["rng"] = optimize_perceiver_rngs[opt_perceiver_epoch]
-        data = synth_data(config)
+        data_key, apply_key = jax.random.split(
+            optimize_perceiver_rngs[opt_perceiver_epoch]
+        )
+
+        data = synth_data(config, data_key)
         params, opt_state, perceiver_loss = backward(
             params,
             opt_state,
@@ -293,73 +288,67 @@ def optimize_perceiver(
             data,
             config,
             opt_perceiver_epoch,
+            apply_key,
         )
 
         opt_perceiver_state = params, opt_state, opt_perceiver_epoch + 1, perceiver_loss
 
         return opt_perceiver_state, opt_perceiver_state
 
+    init_opt_perceiver_state = (perceiver_params, perceiver_opt_state, 0, 0)
+
     def scan_backward(_):
-        init_opt_perceiver_state = (perceiver_params, perceiver_opt_state, 0, 0)
+        carry, history = jax.lax.scan(
+            scanned_backward,
+            init_opt_perceiver_state,
+            None,
+            config["optimize_perceiver"]["epochs"],
+        )
+        return carry, history
 
-        with jax.disable_jit():
-            carry, history = jax.lax.scan(
-                scanned_backward,
-                init_opt_perceiver_state,
-                None,
-                config["optimize_perceiver"]["epochs"],
-            )
-            return carry, history
-
-    return jax.pmap(scan_backward, axis_name="devices")(
-        jnp.arange(jax.local_device_count())
-    )
+    return scan_backward(None)
 
 
-def optimize_universe_config(config: Dict):
+def optimize_universe_config(config: Dict, key: PRNGKeyArray):
     log = config["infra"]["log"]
-    optimize_universe_config_rngs = jax.random.split(
-        config["rng"], config["optimize_universe_config"]["epochs"]
-    )
 
     def universe_config_state_to_config(universe_config_state):
         physics_config, elem_distrib = universe_config_state
         return default_config(physics_config, elem_distrib, log)
 
-    def compute_sophistication(universe_config_state, opt_universe_epoch):
+    def compute_sophistication(universe_config_state, opt_universe_epoch, key):
         config = universe_config_state_to_config(universe_config_state)
-        config["rng"] = optimize_universe_config_rngs[opt_universe_epoch]
+        init_key, apply_key = jax.random.split(key)
 
-        params, perceiver_opt_state, perceiver_optim, forward = init_opt(config)
+        params, perceiver_opt_state, perceiver_optim, forward = init_opt(
+            config, init_key
+        )
 
         opt_perceiver_carry, opt_perceiver_history = optimize_perceiver(
-            config, params, perceiver_opt_state, perceiver_optim, forward
+            config, params, perceiver_opt_state, perceiver_optim, forward, apply_key
         )
         params, perceiver_opt_state, epoch, _ = opt_perceiver_carry
 
         return -compute_l2_penalty(params), (params, opt_perceiver_history[3])
 
-    def scan_optimize_universe_config(_):
-        def init():
-            universe_config_state = (
-                config["data"]["universe_config"]["physics_config"],
-                config["data"]["universe_config"]["elem_distrib"],
-            )
-            universe_config_optim = optax.adamw(
-                config["optimize_universe_config"]["lr"], eps_root=1e-10
-            )
-            universe_config_opt_state = universe_config_optim.init(
-                universe_config_state
-            )
-            return (
-                universe_config_state,
-                universe_config_opt_state,
-                universe_config_optim,
-            )
+    def init():
+        universe_config_state = (
+            config["data"]["universe_config"]["physics_config"],
+            config["data"]["universe_config"]["elem_distrib"],
+        )
+        universe_config_optim = optax.adamw(
+            config["optimize_universe_config"]["lr"], eps_root=1e-10
+        )
+        universe_config_opt_state = universe_config_optim.init(universe_config_state)
+        return (
+            universe_config_state,
+            universe_config_opt_state,
+            universe_config_optim,
+        )
 
-        universe_config_state, universe_config_opt_state, universe_config_optim = init()
+    universe_config_state, universe_config_opt_state, universe_config_optim = init()
 
-        @jax.checkpoint
+    def scan_optimize_universe_config(seed):
         def scanned_optimize_universe_config(opt_universe_config_state, _):
             (
                 universe_config_state,
@@ -369,10 +358,12 @@ def optimize_universe_config(config: Dict):
                 _,
             ) = opt_universe_config_state
             value, grads = jax.value_and_grad(compute_sophistication, has_aux=True)(
-                universe_config_state, opt_universe_epoch
+                universe_config_state, opt_universe_epoch, jax.random.PRNGKey(seed)
             )
             param_count, aux = value
             params, perceiver_loss_history = aux
+
+            grads = jax.lax.pmean(grads, axis_name="devices")
 
             updates, universe_config_opt_state = universe_config_optim.update(
                 grads, universe_config_opt_state, universe_config_state
@@ -388,29 +379,33 @@ def optimize_universe_config(config: Dict):
 
             return opt_universe_config_state, opt_universe_config_state
 
-        with jax.disable_jit():
-            return jax.lax.scan(
-                scanned_optimize_universe_config,
-                (
-                    universe_config_state,
-                    universe_config_opt_state,
-                    0,
-                    0,
-                    jnp.zeros(
-                        (
-                            jax.local_device_count(),
-                            config["optimize_perceiver"]["epochs"],
-                        )
-                    ),
-                ),
-                None,
-                config["optimize_universe_config"]["epochs"],
-            )
+        return jax.lax.scan(
+            scanned_optimize_universe_config,
+            (
+                universe_config_state,
+                universe_config_opt_state,
+                0,
+                0,
+                jnp.zeros((config["optimize_perceiver"]["epochs"],)),
+            ),
+            None,
+            config["optimize_universe_config"]["epochs"],
+        )
 
-    (
-        opt_universe_config_carry,
-        opt_universe_config_history,
-    ) = scan_optimize_universe_config(None)
+    with mesh:
+        (
+            opt_universe_config_carry,
+            opt_universe_config_history,
+        ) = xmap(
+            scan_optimize_universe_config,
+            in_axes=["hosts", "devices"],
+            out_axes=[...],
+            axis_resources={"hosts": "hosts", "devices": "devices"},
+        )(
+            jnp.arange(jax.device_count()).reshape(
+                (jax.process_count(), jax.local_device_count())
+            )
+        )
 
     universe_config_state, opt_state, _, _, _ = opt_universe_config_carry
     config = universe_config_state_to_config(universe_config_state)
@@ -419,12 +414,12 @@ def optimize_universe_config(config: Dict):
 
     # Good old for loops for non-JIT, non-JVP logging.
     # Aggregate across hosts and devices.
-    if config["infra"]["log"] and jax.process_index() == 0:
+    if config["infra"]["log"]:
         for idx, epoch in enumerate(param_count):
             wandb.log({"optimize_universe_config_param_count": epoch}, step=idx)
 
         perceiver_loss_history = reduce(
-            perceiver_loss_history, "ue d pe -> (ue pe)", "mean"
+            perceiver_loss_history, "ue pe -> (ue pe)", "mean"
         )
         for idx, epoch in enumerate(perceiver_loss_history):
             wandb.log({"optimize_perceiver_loss": epoch}, step=idx)
@@ -441,7 +436,6 @@ def checkpoint(params: hk.Params, filepath: str = "."):
 def sanitize_config(config: Dict):
     config["data"]["universe_config"]["elem_distrib"] = None
     config["data"]["universe_config"]["physics_config"] = None
-    config["rng"] = None
     return config
 
 
@@ -453,16 +447,15 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
         "optimize_perceiver": {
             "epochs": 8,
             "branches": 4,
-            "agg_every": 4,
             "lr": 1e-3,
             "weight_decay": 1e-8,
         },
         "optimize_universe_config": {"epochs": 8, "lr": 1e-3, "weight_decay": 1e-8},
         "data": {
-            "n_univs": 9,
-            "steps": 4,
-            "n_cfs": 5,
-            "start": 2,
+            "n_univs": 8,
+            "steps": 128,
+            "n_cfs": 4,
+            "start": 64,
             "universe_config": {
                 "n_elems": 2,
                 "n_atoms": 128,
@@ -470,9 +463,9 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
                 "dt": 0.1,
                 "physics_config": physics_config,
                 "elem_distrib": elem_distrib,
+                "batch_size": 32,
             },
         },
-        "rng": jax.random.PRNGKey(0),
         "preprocessor": {
             "fourier_position_encoding_kwargs": {
                 "num_bands": 4,

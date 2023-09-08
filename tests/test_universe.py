@@ -25,22 +25,22 @@ def test_init_universe(universe: Universe):
     pass
 
 
-def test_one_step(universe: Universe):
-    motions = motion(universe.atom_locs, universe.atom_elems, universe.universe_config)
+def test_one_step(universe: Universe, universe_config: UniverseConfig):
+    motions = motion(universe.atom_locs, universe.atom_elems, universe_config)
 
     init_locs = universe.atom_locs
-    universe = run(universe)
+    universe = run(universe, universe_config)
     final_locs = universe.atom_locs
 
     # Given the one step run default, this should hold.
-    assert jnp.allclose(init_locs + universe.universe_config.dt * motions, final_locs)
+    assert jnp.allclose(init_locs + universe_config.dt * motions, final_locs)
 
 
-def test_run(universe: Universe):
+def test_run(universe: Universe, universe_config: UniverseConfig):
     parallel_universe = deepcopy(universe)
-    parallel_universe2 = run(parallel_universe, 2)
-    universe1 = run(universe)
-    universe2 = run(universe1)
+    parallel_universe2 = run(parallel_universe, universe_config, 2)
+    universe1 = run(universe, universe_config)
+    universe2 = run(universe1, universe_config)
 
     assert not jnp.allclose(universe1.atom_locs, universe2.atom_locs)
     assert jnp.allclose(universe2.atom_locs, parallel_universe2.atom_locs)
@@ -48,21 +48,23 @@ def test_run(universe: Universe):
     assert jnp.allclose(universe2.locs_history, parallel_universe2.locs_history)
     assert universe2.locs_history.shape == (
         2,
-        universe2.universe_config.n_atoms,
-        universe2.universe_config.n_dims,
+        universe_config.n_atoms,
+        universe_config.n_dims,
     )
 
 
-def test_simple_run_with_adv_opt(universe: Universe):
-    vanilla_universe = run(universe, 5)
-    adv_opt_universe = run(universe, 5, False, BrownianOptimizer(jax.random.PRNGKey(0)))
+def test_simple_run_with_adv_opt(universe: Universe, universe_config: UniverseConfig):
+    vanilla_universe = run(universe, universe_config, 5)
+    adv_opt_universe = run(
+        universe, universe_config, 5, False, BrownianOptimizer(jax.random.PRNGKey(0))
+    )
     assert not jnp.allclose(vanilla_universe.atom_locs, adv_opt_universe.atom_locs)
 
 
-def test_trim_rerun(universe: Universe):
-    target = run(universe, 4)
+def test_trim_rerun(universe: Universe, universe_config: UniverseConfig):
+    target = run(universe, universe_config, 4)
     trimmed = trim(target, 2)
-    retarget = run(trimmed, 2)
+    retarget = run(trimmed, universe_config, 2)
 
     assert jnp.allclose(target.atom_locs, retarget.atom_locs)
     assert jnp.allclose(target.locs_history, retarget.locs_history)
@@ -70,12 +72,12 @@ def test_trim_rerun(universe: Universe):
     assert target.step == retarget.step
 
 
-def test_spawn_counterfactuals(universe: Universe):
+def test_spawn_counterfactuals(universe: Universe, universe_config: UniverseConfig):
     n_steps = 4
     n_cfs = 3
 
-    no_adv_opt = run(universe, n_steps)
-    cfs = spawn_counterfactuals(no_adv_opt, 2, n_cfs)
+    no_adv_opt = run(universe, universe_config, n_steps)
+    cfs = spawn_counterfactuals(no_adv_opt, universe_config, 2, n_cfs)
 
     assert jnp.allclose(cfs.step, jnp.array([n_steps] * n_cfs))
     assert not jnp.allclose(cfs.locs_history[0], cfs.locs_history[1])

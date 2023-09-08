@@ -49,8 +49,6 @@ def elem_distrib_to_elems(
     key: PRNGKeyArray = jax.random.PRNGKey(0),
     temperature: float = 1e-4,
 ):
-    # TODO: Remove debug print.
-    print(elem_distrib.shape)
     probs = jax.nn.softmax(elem_distrib / temperature)
     logprobs = jnp.log(probs)
     noise = jax.random.gumbel(key, shape=(n_atoms, n_elems))
@@ -176,8 +174,12 @@ def motion(atom_locs, atom_elems, universe_config):
 
     elem_loc_to_grad = jax.grad(compute_energy_gradient)
 
-    batched_atom_locs = rearrange(atom_locs, "(bs bsize) d -> bs bsize d", bsize=32)
-    batched_atom_elems = rearrange(atom_elems, "(bs bsize) e -> bs bsize e", bsize=32)
+    batched_atom_locs = rearrange(
+        atom_locs, "(bs bsize) d -> bs bsize d", bsize=universe_config.batch_size
+    )
+    batched_atom_elems = rearrange(
+        atom_elems, "(bs bsize) e -> bs bsize e", bsize=universe_config.batch_size
+    )
 
     def process_batch(batch_inputs):
         batch_atom_locs, batch_atom_elems = batch_inputs
@@ -205,17 +207,16 @@ def first_snapshot(atom_locs, universe_config):
     )
 
 
-@partial(jax.checkpoint, static_argnums=(2, 3))
 def step(atom_locs, atom_elems, universe_config, get_jac: bool = False):
     motions = motion(atom_locs, atom_elems, universe_config)
 
     updated_locs = atom_locs + universe_config.dt * motions
-    print(updated_locs.shape, motions.shape)
 
     jac = jnp.zeros(
         (
             universe_config.n_atoms,
             universe_config.n_atoms,
+            universe_config.n_dims,
         )
     )
     if get_jac:

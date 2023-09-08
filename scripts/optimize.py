@@ -1,4 +1,8 @@
-from diotima.perceiver.optimize import optimize_universe_config, default_config, sanitize_config
+from diotima.perceiver.optimize import (
+    optimize_universe_config,
+    default_config,
+    sanitize_config,
+)
 from diotima.world.physics import default_elem_distrib, default_physics_config
 
 import jax
@@ -14,19 +18,18 @@ jax.distributed.initialize()
 
 print("[*] Initializing config...")
 config = default_config(log=True)
-config["data"]["universe_config"]["elem_distrib"] = default_elem_distrib(config["data"]["universe_config"]["n_elems"])
-config["data"]["universe_config"]["physics_config"] = default_physics_config(config["data"]["universe_config"]["n_elems"])
+config["data"]["universe_config"]["elem_distrib"] = default_elem_distrib(
+    config["data"]["universe_config"]["n_elems"]
+)
+config["data"]["universe_config"]["physics_config"] = default_physics_config(
+    config["data"]["universe_config"]["n_elems"]
+)
 
-
-if jax.process_index() == 0:
-    print("[*] Initializing logging...")
-    wandb.init(
-        project="diotima",
-        config=sanitize_config(default_config())
-    )
+print("[*] Initializing logging...")
+wandb.init(project="diotima", config=sanitize_config(default_config()), group="v8-64")
 
 print("[*] Initializing optimization...")
-config = optimize_universe_config(config)
+config = optimize_universe_config(config, jax.random.PRNGKey(0))
 
 print("[*] Saving final config...")
 pickle.dump(config, open("./config.pickle", "wb+"))
