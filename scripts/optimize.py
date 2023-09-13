@@ -1,5 +1,7 @@
 from diotima.perceiver.optimize import (
     optimize_universe_config,
+    optimize_perceiver,
+    init_opt,
     default_config,
     sanitize_config,
 )
@@ -12,6 +14,7 @@ from jax.sharding import Mesh
 import numpy as np
 import pickle
 import wandb
+from safetensors.flax import save_file
 
 print("[*] Initializing distributed job...", jax.process_index())
 jax.distributed.initialize()
@@ -26,7 +29,7 @@ config["data"]["universe_config"]["physics_config"] = default_physics_config(
 )
 
 print("[*] Initializing logging...")
-wandb.init(project="diotima", config=sanitize_config(default_config()), group="v8-64")
+wandb.init(project="diotima", config=sanitize_config(default_config()), group="v8-64-7")
 
 print("[*] Initializing optimization...")
 config = optimize_universe_config(config, jax.random.PRNGKey(0))

@@ -5,13 +5,19 @@ gcloud compute tpus tpu-vm ssh tpu-test-0 \
        --command='export PATH=~/miniconda/bin:$PATH; \
        source $HOME/miniconda/bin/activate; \
        conda activate diotima; \
-       JAX_DISABLE_JIT=1 python optimize.py;';
+       python optimize.py;';
 
 # echo "[*] Cleaning up tpu-vm-..."; \
 # gcloud compute tpus tpu-vm ssh tpu-test-0 \
 #        --worker=all \
 #        --zone=us-central2-b \
 #        --command="rm -rf ~/*" ;
+
+# echo "[*] Cleaning up tpu-vm-..."; \
+# gcloud compute tpus tpu-vm ssh tpu-test-0 \
+#        --worker=all \
+#        --zone=us-central2-b \
+#        --command="rm -rf ~/diotima" ;
 
 # Fetch checkpoints.
 # echo "[*] Copying codebase to tpu-vm-"$i"..."; gcloud compute tpus tpu-vm scp tpu-test-0:~/config.pickle ./ --zone=us-central2-b

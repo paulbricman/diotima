@@ -64,7 +64,9 @@ def seed(
     """
     key_locs, key_elems = jax.random.split(key, num=2)
     atom_locs = jax.random.normal(
-        key_locs, shape=(universe_config.n_atoms, universe_config.n_dims)
+        key_locs,
+        shape=(universe_config.n_atoms, universe_config.n_dims),
+        dtype="bfloat16",
     )
     atom_elems = physics.elem_distrib_to_elems(
         universe_config.n_atoms,
@@ -109,6 +111,7 @@ def run(
                     universe_config.n_atoms,
                     universe_config.n_dims,
                 ),
+                dtype="bfloat16",
             )
             new_snapshot = physics.Snapshot(new_snapshot.locs + delta, new_snapshot.jac)
             adv_opt = BrownianOptimizer(key)

@@ -20,12 +20,11 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.experimental.host_callback import call, id_print
 
 
 def generate_fourier_features(
-        pos, num_bands, max_resolution=(224, 224),
-        concat_pos=True, sine_only=False):
+    pos, num_bands, max_resolution=(224, 224), concat_pos=True, sine_only=False
+):
     """Generate a Fourier frequency position encoding with linear spacing.
 
     Args:
@@ -50,15 +49,20 @@ def generate_fourier_features(
     min_freq = 1.0
     # Nyquist frequency at the target resolution:
 
-    freq_bands = jnp.stack([
-        jnp.linspace(min_freq, res / 2, num=num_bands, endpoint=True)
-        for res in max_resolution], axis=0)
+    freq_bands = jnp.stack(
+        [
+            jnp.linspace(min_freq, res / 2, num=num_bands, endpoint=True)
+            for res in max_resolution
+        ],
+        axis=0,
+    )
 
     # Get frequency bands for each spatial dimension.
     # Output is size [n, d * num_bands]
     per_pos_features = pos[:, :, None] * freq_bands[None, :, :]
-    per_pos_features = jnp.reshape(per_pos_features,
-                                   [-1, np.prod(per_pos_features.shape[1:])])
+    per_pos_features = jnp.reshape(
+        per_pos_features, [-1, np.prod(per_pos_features.shape[1:])]
+    )
 
     if sine_only:
         # Output is size [n, d * num_bands]
@@ -66,8 +70,9 @@ def generate_fourier_features(
     else:
         # Output is size [n, 2 * d * num_bands]
         per_pos_features = jnp.concatenate(
-            [jnp.sin(jnp.pi * per_pos_features),
-             jnp.cos(jnp.pi * per_pos_features)], axis=-1)
+            [jnp.sin(jnp.pi * per_pos_features), jnp.cos(jnp.pi * per_pos_features)],
+            axis=-1,
+        )
     # Concatenate the raw input positions.
     if concat_pos:
         # Adds d bands to the encoding.
@@ -84,15 +89,18 @@ def build_linear_positions(index_dims, output_range=(-1.0, 1.0)):
     Returns:
       A jnp array of shape [index_dims[0], index_dims[1], .., index_dims[-1], N].
     """
+
     def _linspace(n_xels_per_dim):
         return jnp.linspace(
-            output_range[0], output_range[1],
+            output_range[0],
+            output_range[1],
             num=n_xels_per_dim,
-            endpoint=True, dtype=jnp.float32)
+            endpoint=True,
+            dtype=jnp.float32,
+        )
 
-    dim_ranges = [
-        _linspace(n_xels_per_dim) for n_xels_per_dim in index_dims]
-    array_index_grid = jnp.meshgrid(*dim_ranges, indexing='ij')
+    dim_ranges = [_linspace(n_xels_per_dim) for n_xels_per_dim in index_dims]
+    array_index_grid = jnp.meshgrid(*dim_ranges, indexing="ij")
 
     return jnp.stack(array_index_grid, axis=-1)
 
@@ -108,8 +116,7 @@ class AbstractPositionEncoding(hk.Module, metaclass=abc.ABCMeta):
 class TrainablePositionEncoding(AbstractPositionEncoding):
     """Trainable position encoding."""
 
-    def __init__(self, index_dim, num_channels=128,
-                 init_scale=0.02, name=None):
+    def __init__(self, index_dim, num_channels=128, init_scale=0.02, name=None):
         super(TrainablePositionEncoding, self).__init__(name=name)
         self._index_dim = index_dim
         self._num_channels = num_channels
@@ -119,12 +126,15 @@ class TrainablePositionEncoding(AbstractPositionEncoding):
         del pos  # Unused.
 
         pos_embs = hk.get_parameter(
-            'pos_embs', [self._index_dim, self._num_channels],
-            init=hk.initializers.TruncatedNormal(stddev=self._init_scale))
+            "pos_embs",
+            [self._index_dim, self._num_channels],
+            init=hk.initializers.TruncatedNormal(stddev=self._init_scale),
+        )
 
         if batch_size is not None:
             pos_embs = jnp.broadcast_to(
-                pos_embs[None, :, :], (batch_size,) + pos_embs.shape)
+                pos_embs[None, :, :], (batch_size,) + pos_embs.shape
+            )
         return pos_embs
 
 
@@ -157,8 +167,15 @@ def _check_or_build_spatial_positions(pos, index_dims, batch_size):
 class FourierPositionEncoding(AbstractPositionEncoding):
     """Fourier (Sinusoidal) position encoding."""
 
-    def __init__(self, index_dims, num_bands, concat_pos=True,
-                 max_resolution=None, sine_only=False, name=None):
+    def __init__(
+        self,
+        index_dims,
+        num_bands,
+        concat_pos=True,
+        max_resolution=None,
+        sine_only=False,
+        name=None,
+    ):
         super(FourierPositionEncoding, self).__init__(name=name)
         self._num_bands = num_bands
         self._concat_pos = concat_pos
@@ -168,14 +185,14 @@ class FourierPositionEncoding(AbstractPositionEncoding):
         self._max_resolution = max_resolution or index_dims
 
     def __call__(self, batch_size, pos=None):
-        pos = _check_or_build_spatial_positions(
-            pos, self._index_dims, batch_size)
+        pos = _check_or_build_spatial_positions(pos, self._index_dims, batch_size)
         build_ff_fn = functools.partial(
             generate_fourier_features,
             num_bands=self._num_bands,
             max_resolution=self._max_resolution,
             concat_pos=self._concat_pos,
-            sine_only=self._sine_only)
+            sine_only=self._sine_only,
+        )
         return jax.vmap(build_ff_fn, 0, 0)(pos)
 
 
@@ -194,35 +211,35 @@ class PositionEncodingProjector(AbstractPositionEncoding):
 
 
 def build_position_encoding(
-        position_encoding_type,
-        index_dims,
-        project_pos_dim=-1,
-        trainable_position_encoding_kwargs=None,
-        fourier_position_encoding_kwargs=None,
-        name=None):
+    position_encoding_type,
+    index_dims,
+    project_pos_dim=-1,
+    trainable_position_encoding_kwargs=None,
+    fourier_position_encoding_kwargs=None,
+    name=None,
+):
     """Builds the position encoding."""
 
-    if position_encoding_type == 'trainable':
+    if position_encoding_type == "trainable":
         assert trainable_position_encoding_kwargs is not None
         output_pos_enc = TrainablePositionEncoding(
             # Construct 1D features:
             index_dim=np.prod(index_dims),
             name=name,
-            **trainable_position_encoding_kwargs)
-    elif position_encoding_type == 'fourier':
+            **trainable_position_encoding_kwargs,
+        )
+    elif position_encoding_type == "fourier":
         assert fourier_position_encoding_kwargs is not None
         output_pos_enc = FourierPositionEncoding(
-            index_dims=index_dims,
-            name=name,
-            **fourier_position_encoding_kwargs)
+            index_dims=index_dims, name=name, **fourier_position_encoding_kwargs
+        )
     else:
-        raise ValueError(
-            f'Unknown position encoding: {position_encoding_type}.')
+        raise ValueError(f"Unknown position encoding: {position_encoding_type}.")
 
     if project_pos_dim > 0:
         # Project the position encoding to a target dimension:
         output_pos_enc = PositionEncodingProjector(
-            output_size=project_pos_dim,
-            base_position_encoding=output_pos_enc)
+            output_size=project_pos_dim, base_position_encoding=output_pos_enc
+        )
 
     return output_pos_enc

@@ -1,6 +1,15 @@
 #!/bin/bash
 
 echo "[*] Copying codebase to tpu-test-0";
+gcloud alpha compute tpus tpu-vm scp ../diotima/ tpu-test-0:~/diotima \
+       --worker=all \
+       --batch-size=8 \
+       --zone=us-central2-b \
+       --recurse;
+gcloud alpha compute tpus tpu-vm scp ./optimize.py tpu-test-0:~/ \
+       --worker=all \
+       --batch-size=8 \
+       --zone=us-central2-b;
 gcloud alpha compute tpus tpu-vm scp ../wandb.key tpu-test-0:~/ \
        --worker=all \
        --batch-size=8 \
@@ -10,15 +19,6 @@ gcloud alpha compute tpus tpu-vm scp ../setup.py tpu-test-0:~/ \
        --batch-size=8 \
        --zone=us-central2-b;
 gcloud alpha compute tpus tpu-vm scp ../environment.yml tpu-test-0:~/ \
-       --worker=all \
-       --batch-size=8 \
-       --zone=us-central2-b;
-gcloud alpha compute tpus tpu-vm scp ../diotima/ tpu-test-0:~/diotima \
-       --worker=all \
-       --batch-size=8 \
-       --zone=us-central2-b \
-       --recurse;
-gcloud alpha compute tpus tpu-vm scp ./optimize.py tpu-test-0:~/ \
        --worker=all \
        --batch-size=8 \
        --zone=us-central2-b;

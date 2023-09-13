@@ -128,7 +128,9 @@ def raw_forward(data: Data, config: Dict, is_training: bool):
 
     def decode_slot(latent):
         latent = rearrange(latent, "u z -> u 1 z")
-        return decoder(decoder_query, latent, is_training=is_training)
+        return decoder(decoder_query, latent, is_training=is_training).astype(
+            "bfloat16"
+        )
 
     one_step_preds = hk.vmap(decode_slot, in_axes=1)(latents)
     agg_one_step_preds = reduce(one_step_preds, "z u a l -> u a l", "sum")
@@ -196,7 +198,11 @@ def init_opt(config: Dict, key: PRNGKeyArray):
     forward = hk.transform(raw_forward)
     params = forward.init(init_key, data, config, True)
 
-    optim = optax.adamw(config["optimize_perceiver"]["lr"], eps_root=1e-10)
+    optim = optax.adamw(
+        config["optimize_perceiver"]["lr"],
+        eps_root=1e-10,
+        weight_decay=config["optimize_perceiver"]["weight_decay"],
+    )
     opt_state = optim.init(params)
 
     return params, opt_state, optim, forward
@@ -207,7 +213,7 @@ def loss(params: hk.Params, forward, data: Data, config: Dict, key: PRNGKeyArray
     data, agents = out
     error = distance(data.pred_locs_future, data.locs_future)
 
-    return -error
+    return error
 
 
 def distance(
@@ -253,7 +259,8 @@ def backward(
     key: PRNGKeyArray,
 ):
     perceiver_loss, grads = jax.value_and_grad(loss)(params, forward, data, config, key)
-    # grads = jax.lax.pmean(grads, axis_name="devices")
+    grads = jax.lax.pmean(grads, axis_name="devices")
+    grads = jax.lax.pmean(grads, axis_name="hosts")
 
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = optax.apply_updates(params, updates)
@@ -309,7 +316,7 @@ def optimize_perceiver(
     return scan_backward(None)
 
 
-def optimize_universe_config(config: Dict, key: PRNGKeyArray):
+def optimize_universe_config(config: Dict, key: PRNGKeyArray, return_params=False):
     log = config["infra"]["log"]
 
     def universe_config_state_to_config(universe_config_state):
@@ -336,7 +343,7 @@ def optimize_universe_config(config: Dict, key: PRNGKeyArray):
             config["data"]["universe_config"]["physics_config"],
             config["data"]["universe_config"]["elem_distrib"],
         )
-        universe_config_optim = optax.adamw(
+        universe_config_optim = optax.adam(
             config["optimize_universe_config"]["lr"], eps_root=1e-10
         )
         universe_config_opt_state = universe_config_optim.init(universe_config_state)
@@ -364,11 +371,13 @@ def optimize_universe_config(config: Dict, key: PRNGKeyArray):
             params, perceiver_loss_history = aux
 
             grads = jax.lax.pmean(grads, axis_name="devices")
+            grads = jax.lax.pmean(grads, axis_name="hosts")
 
             updates, universe_config_opt_state = universe_config_optim.update(
                 grads, universe_config_opt_state, universe_config_state
             )
             universe_config_state = optax.apply_updates(universe_config_state, updates)
+
             opt_universe_config_state = (
                 universe_config_state,
                 universe_config_opt_state,
@@ -386,7 +395,7 @@ def optimize_universe_config(config: Dict, key: PRNGKeyArray):
                 universe_config_opt_state,
                 0,
                 0,
-                jnp.zeros((config["optimize_perceiver"]["epochs"],)),
+                jnp.zeros((config["optimize_perceiver"]["epochs"],), dtype="bfloat16"),
             ),
             None,
             config["optimize_universe_config"]["epochs"],
@@ -407,23 +416,49 @@ def optimize_universe_config(config: Dict, key: PRNGKeyArray):
             )
         )
 
+    # TODO: Refactor the end of this function into a separate one for pushing history to wandb.
+    # This one should only return a history.
     universe_config_state, opt_state, _, _, _ = opt_universe_config_carry
     config = universe_config_state_to_config(universe_config_state)
 
     _, _, _, param_count, perceiver_loss_history = opt_universe_config_history
 
     # Good old for loops for non-JIT, non-JVP logging.
-    # Aggregate across hosts and devices.
     if config["infra"]["log"]:
         for idx, epoch in enumerate(param_count):
-            wandb.log({"optimize_universe_config_param_count": epoch}, step=idx)
+            wandb.log({"optimize_universe_config_param_count": epoch})
 
         perceiver_loss_history = reduce(
             perceiver_loss_history, "ue pe -> (ue pe)", "mean"
         )
         for idx, epoch in enumerate(perceiver_loss_history):
-            wandb.log({"optimize_perceiver_loss": epoch}, step=idx)
+            wandb.log({"optimize_perceiver_loss": epoch})
 
+    if return_params:
+        with mesh:
+
+            def last_perceiver(_):
+                params, opt_state, optim, forward = init_opt(
+                    config, jax.random.PRNGKey(0)
+                )
+                opt_perceiver_carry, opt_perceiver_history = optimize_perceiver(
+                    config, params, opt_state, optim, forward, jax.random.PRNGKey(0)
+                )
+                params, perceiver_opt_state, epoch, _ = opt_perceiver_carry
+                return params
+
+            last_params = xmap(
+                last_perceiver,
+                in_axes=["hosts", "devices"],
+                out_axes=[...],
+                axis_resources={"hosts": "hosts", "devices": "devices"},
+            )(
+                jnp.arange(jax.device_count()).reshape(
+                    (jax.process_count(), jax.local_device_count())
+                )
+            )
+
+        return config, last_params
     return config
 
 
@@ -445,17 +480,17 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "log": log,
         },
         "optimize_perceiver": {
-            "epochs": 8,
+            "epochs": 12,
             "branches": 4,
-            "lr": 1e-3,
-            "weight_decay": 1e-8,
+            "lr": 1e-2,
+            "weight_decay": 1e-6,
         },
-        "optimize_universe_config": {"epochs": 8, "lr": 1e-3, "weight_decay": 1e-8},
+        "optimize_universe_config": {"epochs": 64, "lr": 1e-4},
         "data": {
-            "n_univs": 8,
+            "n_univs": 2,
             "steps": 128,
             "n_cfs": 4,
-            "start": 64,
+            "start": 96,
             "universe_config": {
                 "n_elems": 2,
                 "n_atoms": 128,
@@ -463,35 +498,35 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
                 "dt": 0.1,
                 "physics_config": physics_config,
                 "elem_distrib": elem_distrib,
-                "batch_size": 32,
+                "batch_size": 16,
             },
         },
         "preprocessor": {
             "fourier_position_encoding_kwargs": {
-                "num_bands": 4,
+                "num_bands": 9,
                 "max_resolution": [1],
-                "sine_only": False,
+                "sine_only": True,
                 "concat_pos": True,
             }
         },
         "encoder": {
-            "z_index_dim": 8,
-            "num_z_channels": 8,
-            "num_cross_attend_heads": 1,
-            "num_blocks": 2,
+            "z_index_dim": 64,
+            "num_z_channels": 16,
+            "num_cross_attend_heads": 4,
+            "num_blocks": 4,
             "num_self_attends_per_block": 2,
             "num_self_attend_heads": 2,
-            "dropout_prob": 0.2,
+            "dropout_prob": 0.1,
         },
         "decoder": {
             "output_num_channels": 2,  # Has to match n_dims
-            "num_z_channels": 8,
+            "num_z_channels": 16,
             "use_query_residual": False,
             "fourier_position_encoding_kwargs": {
-                "num_bands": 4,
+                "num_bands": 8,
                 "max_resolution": [1],
-                "sine_only": True,
-                "concat_pos": False,
+                "sine_only": False,
+                "concat_pos": True,
             },
         },
     }

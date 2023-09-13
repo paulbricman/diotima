@@ -29,17 +29,17 @@ def default_physics_config(n_elems: int):
     # Note: Dummy params which are identical for each elem yield null gradients if optimized.
     # In other words, changing atom composition has no effect if elems have same properties.
     return PhysicsConfig(
-        jnp.tile(4.0, (n_elems)),
-        jnp.tile(1.0, (n_elems)),
-        jnp.tile(1.15, (n_elems)),
-        jnp.tile(0.6, (n_elems, n_elems)),
-        jnp.tile(-1.5, (n_elems, n_elems)),
-        jnp.tile(1.0, (n_elems, n_elems)),
+        jnp.tile(jnp.array(4.0, dtype="bfloat16"), (n_elems)),
+        jnp.tile(jnp.array(1.0, dtype="bfloat16"), (n_elems)),
+        jnp.tile(jnp.array(1.15, dtype="bfloat16"), (n_elems)),
+        jnp.tile(jnp.array(0.6, dtype="bfloat16"), (n_elems, n_elems)),
+        jnp.tile(jnp.array(-1.5, dtype="bfloat16"), (n_elems, n_elems)),
+        jnp.tile(jnp.array(1.0, dtype="bfloat16"), (n_elems, n_elems)),
     )
 
 
 def default_elem_distrib(n_elems: int):
-    return jax.random.uniform(jax.random.PRNGKey(0), (n_elems,))
+    return jax.random.uniform(jax.random.PRNGKey(0), (n_elems,), dtype="bfloat16")
 
 
 def elem_distrib_to_elems(
@@ -47,7 +47,7 @@ def elem_distrib_to_elems(
     n_elems: int,
     elem_distrib: Array,
     key: PRNGKeyArray = jax.random.PRNGKey(0),
-    temperature: float = 1e-4,
+    temperature: float = jnp.array(1e-1, dtype="bfloat16"),
 ):
     probs = jax.nn.softmax(elem_distrib / temperature)
     logprobs = jnp.log(probs)

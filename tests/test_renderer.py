@@ -195,13 +195,18 @@ def test_compute_colors(camera_loc: Array, atom_locs_render: Array, light_loc: A
     img.save("media/colors.jpg")
 
 
-def test_render_frames(universe: Universe, camera_loc: Array, light_loc: Array):
+def test_render_frames(
+    universe: Universe,
+    univers_config: UniverseConfig,
+    camera_loc: Array,
+    light_loc: Array,
+):
     n_frame_chunks = 1
     n_frames_in_chunk = 1
     view_size = 256, 144
     w, h = view_size
     atom_colors = jax.random.uniform(
-        jax.random.PRNGKey(0), (universe.universe_config.n_atoms, 3)
+        jax.random.PRNGKey(0), (universe_config.n_atoms, 3)
     )
     atom_colors = repeat(atom_colors, "a c -> f a c", f=n_frames_in_chunk)
     out = cv2.VideoWriter(

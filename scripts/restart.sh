@@ -1,5 +1,8 @@
-echo "[*] Deleting tpu-test-0...";
-gcloud compute tpus tpu-vm delete tpu-test-0 --zone=us-central2-b;
+gcloud alpha compute tpus queued-resources delete queued-resource-0 \
+--project the-chronicles-of-computation \
+--zone us-central2-b \
+--force \
+--async
 
 echo "[*] Creating TPU Pod...";
 gcloud alpha compute tpus queued-resources create queued-resource-0 \
@@ -12,9 +15,3 @@ gcloud alpha compute tpus queued-resources create queued-resource-0 \
 
 gcloud alpha compute tpus queued-resources list --project the-chronicles-of-computation \
 --zone us-central2-b;
-
-# gcloud alpha compute tpus queued-resources delete queued-resource-0 \
-# --project the-chronicles-of-computation \
-# --zone us-central2-b \
-# --force \
-# --async
