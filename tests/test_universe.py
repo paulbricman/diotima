@@ -1,5 +1,6 @@
 from diotima.world.universe import *
 from diotima.world.physics import *
+from diotima.perceiver.optimize import distance
 
 import jax.numpy as jnp
 
@@ -84,3 +85,26 @@ def test_spawn_counterfactuals(universe: Universe, universe_config: UniverseConf
 
     # In the beginning, there was only physics (no adv opt).
     assert jnp.allclose(cfs.locs_history[0][0], cfs.locs_history[1][0])
+
+
+def test_diff_universe_configs(universe: Universe, universe_config: UniverseConfig):
+    n_elems = 3
+    physics_config2 = default_physics_config(n_elems)
+    physics_config2 = physics_config2._replace(
+        mu_ks=jnp.tile(jnp.array(4.0), (n_elems))
+    )
+    universe_config2 = universe_config._replace(physics_config=physics_config2)
+    universe2 = seed(universe_config2)
+
+    universe = run(universe, universe_config, 30)
+    universe2 = run(universe2, universe_config2, 30)
+
+    for _ in range(2):
+        universe = run(
+            universe,
+            universe_config,
+        )
+        universe2 = run(universe2, universe_config2)
+
+    cfs1 = spawn_counterfactuals(universe, universe_config, 32, 1)
+    cfs2 = spawn_counterfactuals(universe2, universe_config2, 32, 1)

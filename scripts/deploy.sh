@@ -5,7 +5,7 @@ gcloud compute tpus tpu-vm ssh tpu-test-0 \
        --command='export PATH=~/miniconda/bin:$PATH; \
        source $HOME/miniconda/bin/activate; \
        conda activate diotima; \
-       python optimize.py;';
+       JAX_DEBUG_NANS=True python optimize.py;';
 
 # echo "[*] Cleaning up tpu-vm-..."; \
 # gcloud compute tpus tpu-vm ssh tpu-test-0 \

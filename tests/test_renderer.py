@@ -213,7 +213,7 @@ def test_render_frames(
         "media/frames.mp4", cv2.VideoWriter_fourcc(*"mp4v"), 25, (w, h)
     )
 
-    for chunk in range(n_frame_chunks):
+    for _ in range(n_frame_chunks):
         universe = run(universe, n_frames_in_chunk)
 
         frames = render_frames(

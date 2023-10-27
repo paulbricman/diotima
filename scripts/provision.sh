@@ -1,6 +1,10 @@
 #!/bin/bash
 
 echo "[*] Copying codebase to tpu-test-0";
+gcloud alpha compute tpus tpu-vm scp ./optimize.py tpu-test-0:~/ \
+       --worker=all \
+       --batch-size=8 \
+       --zone=us-central2-b;
 gcloud alpha compute tpus tpu-vm scp ../diotima/ tpu-test-0:~/diotima \
        --worker=all \
        --batch-size=8 \

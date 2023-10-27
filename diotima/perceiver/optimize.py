@@ -74,7 +74,6 @@ def synth_universe_data(config: Dict, key: PRNGKeyArray):
 
 def synth_data(config: Dict, key: PRNGKeyArray):
     synth_data_rngs = jax.random.split(key, config["data"]["n_univs"])
-    # Local config copy to avoid side effects:
     config = config.copy()
 
     def pure_synth_universe_data(univ):
@@ -98,7 +97,7 @@ def raw_forward(data: Data, config: Dict, is_training: bool):
     encoder = PerceiverEncoder(**config["encoder"])
     decoder = BasicDecoder(**config["decoder"])
 
-    input, _, input_without_pos = preprocessor(input, pos)
+    input, _, _ = preprocessor(input, pos)
     encoder_query = encoder.latents(input)
 
     decoder_query_input = repeat(
@@ -115,22 +114,16 @@ def raw_forward(data: Data, config: Dict, is_training: bool):
         u=config["data"]["n_univs"],
         a=n_atoms,
     )
-
     decoder_query_pos = jnp.concatenate(
         (decoder_query_space_pos, decoder_query_branch_pos), axis=2
     )
 
-    decoder_query, _, decoder_query_without_pos = preprocessor(
-        decoder_query_input, decoder_query_pos
-    )
-
+    decoder_query, _, _ = preprocessor(decoder_query_input, decoder_query_pos)
     latents, scores = encoder(input, encoder_query, is_training=is_training)
 
     def decode_slot(latent):
         latent = rearrange(latent, "u z -> u 1 z")
-        return decoder(decoder_query, latent, is_training=is_training).astype(
-            "bfloat16"
-        )
+        return decoder(decoder_query, latent, is_training=is_training).astype("float32")
 
     one_step_preds = hk.vmap(decode_slot, in_axes=1)(latents)
     agg_one_step_preds = reduce(one_step_preds, "z u a l -> u a l", "sum")
@@ -154,7 +147,6 @@ def raw_forward(data: Data, config: Dict, is_training: bool):
         return forecast
 
     forecast = preds_to_forecast()
-
     enriched_data = Data(
         data.atom_elems,
         data.idx_history,
@@ -162,7 +154,6 @@ def raw_forward(data: Data, config: Dict, is_training: bool):
         data.locs_future,
         forecast,
     )
-
     agents = Agents(flows, compute_attn_rollouts(scores))
 
     return enriched_data, agents
@@ -198,10 +189,11 @@ def init_opt(config: Dict, key: PRNGKeyArray):
     forward = hk.transform(raw_forward)
     params = forward.init(init_key, data, config, True)
 
-    optim = optax.adamw(
+    optim = optax.adam(
         config["optimize_perceiver"]["lr"],
         eps_root=1e-10,
-        weight_decay=config["optimize_perceiver"]["weight_decay"],
+        # TODO: Restore
+        # weight_decay=config["optimize_perceiver"]["weight_decay"],
     )
     opt_state = optim.init(params)
 
@@ -210,10 +202,8 @@ def init_opt(config: Dict, key: PRNGKeyArray):
 
 def loss(params: hk.Params, forward, data: Data, config: Dict, key: PRNGKeyArray):
     out = forward.apply(params, key, data, config, is_training=True)
-    data, agents = out
-    error = distance(data.pred_locs_future, data.locs_future)
-
-    return error
+    data, _ = out
+    return distance(data.pred_locs_future, data.locs_future)
 
 
 def distance(
@@ -244,7 +234,7 @@ def distance(
 
 
 def compute_l2_penalty(params):
-    theta, unravel = jax.flatten_util.ravel_pytree(params)
+    theta, _ = jax.flatten_util.ravel_pytree(params)
     return jnp.sum(theta**2)
 
 
@@ -255,7 +245,6 @@ def backward(
     optimizer,
     data: Data,
     config: Dict,
-    epoch: Array,
     key: PRNGKeyArray,
 ):
     perceiver_loss, grads = jax.value_and_grad(loss)(params, forward, data, config, key)
@@ -294,12 +283,10 @@ def optimize_perceiver(
             perceiver_optim,
             data,
             config,
-            opt_perceiver_epoch,
             apply_key,
         )
 
         opt_perceiver_state = params, opt_state, opt_perceiver_epoch + 1, perceiver_loss
-
         return opt_perceiver_state, opt_perceiver_state
 
     init_opt_perceiver_state = (perceiver_params, perceiver_opt_state, 0, 0)
@@ -323,28 +310,30 @@ def optimize_universe_config(config: Dict, key: PRNGKeyArray, return_params=Fals
         physics_config, elem_distrib = universe_config_state
         return default_config(physics_config, elem_distrib, log)
 
-    def compute_sophistication(universe_config_state, opt_universe_epoch, key):
+    def compute_sophistication(universe_config_state, key):
         config = universe_config_state_to_config(universe_config_state)
         init_key, apply_key = jax.random.split(key)
 
         params, perceiver_opt_state, perceiver_optim, forward = init_opt(
             config, init_key
         )
-
         opt_perceiver_carry, opt_perceiver_history = optimize_perceiver(
             config, params, perceiver_opt_state, perceiver_optim, forward, apply_key
         )
-        params, perceiver_opt_state, epoch, _ = opt_perceiver_carry
+        params, _, _, _ = opt_perceiver_carry
 
-        return -compute_l2_penalty(params), (params, opt_perceiver_history[3])
+        return jnp.mean(opt_perceiver_history[3]), (params, opt_perceiver_history[3])
+        # TODO: Restore.
+        # return compute_l2_penalty(params), (params, opt_perceiver_history[3])
 
     def init():
         universe_config_state = (
             config["data"]["universe_config"]["physics_config"],
             config["data"]["universe_config"]["elem_distrib"],
         )
+
         universe_config_optim = optax.adam(
-            config["optimize_universe_config"]["lr"], eps_root=1e-10
+            learning_rate=config["optimize_universe_config"]["lr"], eps_root=1e-10
         )
         universe_config_opt_state = universe_config_optim.init(universe_config_state)
         return (
@@ -365,10 +354,11 @@ def optimize_universe_config(config: Dict, key: PRNGKeyArray, return_params=Fals
                 _,
             ) = opt_universe_config_state
             value, grads = jax.value_and_grad(compute_sophistication, has_aux=True)(
-                universe_config_state, opt_universe_epoch, jax.random.PRNGKey(seed)
+                universe_config_state,
+                jax.random.PRNGKey(seed + opt_universe_epoch * 100),
             )
             param_count, aux = value
-            params, perceiver_loss_history = aux
+            _, perceiver_loss_history = aux
 
             grads = jax.lax.pmean(grads, axis_name="devices")
             grads = jax.lax.pmean(grads, axis_name="hosts")
@@ -395,7 +385,7 @@ def optimize_universe_config(config: Dict, key: PRNGKeyArray, return_params=Fals
                 universe_config_opt_state,
                 0,
                 0,
-                jnp.zeros((config["optimize_perceiver"]["epochs"],), dtype="bfloat16"),
+                jnp.zeros((config["optimize_perceiver"]["epochs"],), dtype="float32"),
             ),
             None,
             config["optimize_universe_config"]["epochs"],
@@ -418,21 +408,24 @@ def optimize_universe_config(config: Dict, key: PRNGKeyArray, return_params=Fals
 
     # TODO: Refactor the end of this function into a separate one for pushing history to wandb.
     # This one should only return a history.
-    universe_config_state, opt_state, _, _, _ = opt_universe_config_carry
+    universe_config_state, _, _, _, _ = opt_universe_config_carry
     config = universe_config_state_to_config(universe_config_state)
 
     _, _, _, param_count, perceiver_loss_history = opt_universe_config_history
 
-    # Good old for loops for non-JIT, non-JVP logging.
+    # Good old for-loops for non-JIT, non-JVP logging.
     if config["infra"]["log"]:
-        for idx, epoch in enumerate(param_count):
+        for epoch in param_count:
             wandb.log({"optimize_universe_config_param_count": epoch})
 
         perceiver_loss_history = reduce(
             perceiver_loss_history, "ue pe -> (ue pe)", "mean"
         )
-        for idx, epoch in enumerate(perceiver_loss_history):
+        for epoch in perceiver_loss_history:
             wandb.log({"optimize_perceiver_loss": epoch})
+
+        for epoch in opt_universe_config_history[0][0].mu_ks[0:, 0]:
+            wandb.log({"mu_ks": epoch})
 
     if return_params:
         with mesh:
@@ -462,12 +455,6 @@ def optimize_universe_config(config: Dict, key: PRNGKeyArray, return_params=Fals
     return config
 
 
-def checkpoint(params: hk.Params, filepath: str = "."):
-    root = Path(filepath)
-
-    save_file(params, filename=root / "params.safetensors")
-
-
 def sanitize_config(config: Dict):
     config["data"]["universe_config"]["elem_distrib"] = None
     config["data"]["universe_config"]["physics_config"] = None
@@ -480,51 +467,53 @@ def default_config(physics_config=None, elem_distrib=None, log=False):
             "log": log,
         },
         "optimize_perceiver": {
-            "epochs": 12,
-            "branches": 4,
-            "lr": 1e-2,
-            "weight_decay": 1e-6,
+            "epochs": 2,
+            "branches": 1,
+            "lr": 2e-4,
+            # TODO: Restore
+            # "weight_decay": 1e-10,
         },
-        "optimize_universe_config": {"epochs": 64, "lr": 1e-4},
+        "optimize_universe_config": {"epochs": 2, "lr": 1e-3},
         "data": {
-            "n_univs": 2,
-            "steps": 128,
-            "n_cfs": 4,
-            "start": 96,
+            "n_univs": 32,
+            "steps": 4,
+            "n_cfs": 1,
+            "start": 3,
             "universe_config": {
-                "n_elems": 2,
-                "n_atoms": 128,
+                "n_elems": 1,
+                "n_atoms": 4,
                 "n_dims": 2,
-                "dt": 0.1,
+                "dt": 1e-1,
                 "physics_config": physics_config,
                 "elem_distrib": elem_distrib,
-                "batch_size": 16,
+                "batch_size": 2,
             },
         },
         "preprocessor": {
             "fourier_position_encoding_kwargs": {
-                "num_bands": 9,
-                "max_resolution": [1],
+                "num_bands": 19,
+                "max_resolution": [1.0],
                 "sine_only": True,
                 "concat_pos": True,
             }
         },
         "encoder": {
-            "z_index_dim": 64,
-            "num_z_channels": 16,
-            "num_cross_attend_heads": 4,
-            "num_blocks": 4,
-            "num_self_attends_per_block": 2,
+            "z_index_dim": 2,
+            "num_z_channels": 4,
+            "num_cross_attend_heads": 1,
+            "num_blocks": 2,
+            "num_self_attends_per_block": 1,
             "num_self_attend_heads": 2,
             "dropout_prob": 0.1,
+            "use_query_residual": False,
         },
         "decoder": {
             "output_num_channels": 2,  # Has to match n_dims
-            "num_z_channels": 16,
+            "num_z_channels": 4,
             "use_query_residual": False,
             "fourier_position_encoding_kwargs": {
-                "num_bands": 8,
-                "max_resolution": [1],
+                "num_bands": 16,
+                "max_resolution": [1.0],
                 "sine_only": False,
                 "concat_pos": True,
             },

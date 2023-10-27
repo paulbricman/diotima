@@ -62,11 +62,12 @@ def seed(
     Returns:
         Seeded universe object.
     """
+    # TODO: Unfix key
     key_locs, key_elems = jax.random.split(key, num=2)
     atom_locs = jax.random.normal(
         key_locs,
         shape=(universe_config.n_atoms, universe_config.n_dims),
-        dtype="bfloat16",
+        dtype="float32",
     )
     atom_elems = physics.elem_distrib_to_elems(
         universe_config.n_atoms,
@@ -105,13 +106,17 @@ def run(
 
         if adv_opt:
             key, subkey = jax.random.split(adv_opt.key, num=2)
-            delta = jax.random.normal(
-                subkey,
-                shape=(
-                    universe_config.n_atoms,
-                    universe_config.n_dims,
-                ),
-                dtype="bfloat16",
+            delta = (
+                jax.random.normal(
+                    subkey,
+                    shape=(
+                        universe_config.n_atoms,
+                        universe_config.n_dims,
+                    ),
+                    dtype="float32",
+                )
+                * 0
+                # TODO: Add back adv opt.
             )
             new_snapshot = physics.Snapshot(new_snapshot.locs + delta, new_snapshot.jac)
             adv_opt = BrownianOptimizer(key)
